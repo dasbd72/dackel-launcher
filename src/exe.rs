@@ -93,6 +93,7 @@ pub fn legacy_hint(game_dir: &Path) -> io::Result<Option<PathBuf>> {
     let Some(value) = text
         .lines()
         .map(str::trim)
+        .map(|line| line.strip_prefix("export ").unwrap_or(line).trim_start())
         .find_map(|line| line.strip_prefix("GAME_EXE="))
     else {
         return Ok(None);

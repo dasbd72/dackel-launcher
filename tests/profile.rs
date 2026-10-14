@@ -228,3 +228,24 @@ fn only_the_metadata_folder_is_ever_written() {
         .collect();
     assert_eq!(after, before);
 }
+
+#[test]
+fn exported_game_exe_in_start_sh_is_used_as_a_hint() {
+    let game = tempfile::tempdir().unwrap();
+    file(game.path(), "Bin/Game.exe", 5000);
+    file(game.path(), "Launcher.exe", 5000);
+    fs::write(
+        game.path().join("start.sh"),
+        "#!/bin/bash\nexport GAME_EXE=\"${SCRIPT_DIR}/Bin/Game.exe\"\nexport WORKING_DIR=\"$(dirname \"$GAME_EXE\")\"\n",
+    )
+    .unwrap();
+
+    let state = ensure(game.path()).unwrap();
+
+    assert_eq!(
+        state,
+        ExeState::Ready {
+            exe: PathBuf::from("Bin/Game.exe")
+        }
+    );
+}
