@@ -31,3 +31,48 @@ pub fn next_scale(current: f32) -> f32 {
         .find(|&preset| preset > current + 1e-3)
         .unwrap_or(SCALE_PRESETS[0])
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestoreStep {
+    Idle,
+    Request,
+    Done,
+}
+
+const RESTORE_FIRST_DELAY_MS: u64 = 300;
+const RESTORE_INTERVAL_MS: u64 = 700;
+const RESTORE_MAX_REQUESTS: u32 = 6;
+
+/// Retries "bring the launcher back" after a game exits. A window manager may refuse
+/// while the exiting game's window is still the active one, so the first ask waits a
+/// moment and later asks repeat until the window is visible or the tries run out.
+#[derive(Debug, Default)]
+pub struct Restore {
+    armed: bool,
+    next_ms: u64,
+    requests: u32,
+}
+
+impl Restore {
+    pub fn arm(&mut self, now_ms: u64) {
+        self.armed = true;
+        self.next_ms = now_ms + RESTORE_FIRST_DELAY_MS;
+        self.requests = 0;
+    }
+
+    pub fn poll(&mut self, now_ms: u64, still_minimized: bool) -> RestoreStep {
+        if !self.armed {
+            return RestoreStep::Idle;
+        }
+        if !still_minimized || self.requests >= RESTORE_MAX_REQUESTS && now_ms >= self.next_ms {
+            self.armed = false;
+            return RestoreStep::Done;
+        }
+        if now_ms < self.next_ms {
+            return RestoreStep::Idle;
+        }
+        self.requests += 1;
+        self.next_ms = now_ms + RESTORE_INTERVAL_MS;
+        RestoreStep::Request
+    }
+}

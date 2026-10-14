@@ -13,7 +13,7 @@ use dlsite_launcher::profile::{self, ExeState, Stats};
 use dlsite_launcher::proton;
 use dlsite_launcher::reload::Reloads;
 use dlsite_launcher::settings::{self, Settings};
-use dlsite_launcher::window;
+use dlsite_launcher::window::{self, Restore, RestoreStep};
 use eframe::egui;
 use gilrs::{Axis, Button, EventType, Gilrs};
 use std::collections::{HashMap, HashSet};
@@ -186,6 +186,10 @@ struct App {
     /// Window changes decided in `apply`, sent to egui at the end of the frame.
     window_cmds: Vec<egui::ViewportCommand>,
     zoom_request: Option<f32>,
+    /// Set when a game launch minimized the window, so only then do we bring it back.
+    minimized_by_us: bool,
+    restore: Restore,
+    started: std::time::Instant,
 }
 
 impl App {
@@ -223,6 +227,9 @@ impl App {
             scale: startup.scale,
             window_cmds: Vec::new(),
             zoom_request: None,
+            minimized_by_us: false,
+            restore: Restore::default(),
+            started: std::time::Instant::now(),
         };
         app.rescan();
         app
@@ -320,6 +327,7 @@ impl App {
                             // Hand the screen to the game; minimize rather than close.
                             self.window_cmds
                                 .push(egui::ViewportCommand::Minimized(true));
+                            self.minimized_by_us = true;
                         }
                         format!("Launched {}", entry.game.id)
                     }
@@ -599,13 +607,26 @@ impl eframe::App for App {
         if running {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
+        let now_ms = self.started.elapsed().as_millis() as u64;
         if was_running && !running {
             self.refresh_stats();
-            if self.deck_like {
-                // The game is done: bring the launcher back to the front.
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            if self.minimized_by_us {
+                self.restore.arm(now_ms);
             }
+        }
+        if self.minimized_by_us && !running {
+            // Bring the launcher back once the game is gone. Retried, because the window
+            // manager may refuse while the game's window is still the active one.
+            let minimized = ctx.input(|i| i.viewport().minimized) == Some(true);
+            match self.restore.poll(now_ms, minimized) {
+                RestoreStep::Request => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                RestoreStep::Done => self.minimized_by_us = false,
+                RestoreStep::Idle => {}
+            }
+            ctx.request_repaint_after(Duration::from_millis(150));
         }
     }
 
