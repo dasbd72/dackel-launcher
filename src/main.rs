@@ -78,6 +78,18 @@ fn main() -> eframe::Result {
 }
 
 const TILE_WIDTH: f32 = 200.0;
+
+const SORT_HELP: &str = "Sort\n\
+Last played: most recently played first; games never played go last.\n\
+Title: alphabetical by title.\n\
+Date added: newest folder first.";
+
+const ZIP_ENCODING_HELP: &str = "Zip encoding\n\
+How file names inside a zip are read when you press Extract or Re-extract.\n\
+Auto: UTF-8 if the zip says so, otherwise cp932 (Shift-JIS).\n\
+cp932 / UTF-8: force one. If extracted names come out garbled, pick the other\n\
+and press Re-extract.";
+
 /// Padding around each tile. The focus ring is drawn inside this margin, so it can never
 /// reach a neighboring tile or the row above.
 const RING_PAD: i8 = 6;
@@ -710,31 +722,36 @@ impl eframe::App for App {
                             }
                         }
                     });
-                egui::ComboBox::from_label("Zip encoding")
+                egui::ComboBox::from_id_salt("zip-encoding")
                     .selected_text(encoding_label(self.encoding))
                     .show_ui(ui, |ui| {
                         for choice in [Encoding::Auto, Encoding::Cp932, Encoding::Utf8] {
                             ui.selectable_value(&mut self.encoding, choice, encoding_label(choice));
                         }
-                    });
+                    })
+                    .response
+                    .on_hover_text(ZIP_ENCODING_HELP);
                 ui.label(self.library.display().to_string());
             });
             if matches!(self.screen, Screen::Grid) {
                 ui.horizontal(|ui| {
-                    egui::ComboBox::from_label("Sort")
+                    egui::ComboBox::from_id_salt("sort")
                         .selected_text(sort_label(self.query.sort))
                         .show_ui(ui, |ui| {
                             for sort in [Sort::LastPlayed, Sort::Title, Sort::DateAdded] {
                                 ui.selectable_value(&mut self.query.sort, sort, sort_label(sort));
                             }
-                        });
+                        })
+                        .response
+                        .on_hover_text(SORT_HELP);
                     ui.label("Search");
                     ui.text_edit_singleline(&mut self.query.text);
                     ui.checkbox(&mut self.query.favorites_only, "Favorites only");
                 });
             }
             if let Some(message) = &self.message {
-                ui.label(message);
+                // Status line ("Extracted ...", "Launched ..."): small and muted.
+                ui.label(egui::RichText::new(message).small().weak());
             }
         });
 
