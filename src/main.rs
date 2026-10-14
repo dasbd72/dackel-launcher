@@ -59,6 +59,10 @@ fn main() -> eframe::Result {
 }
 
 const TILE_WIDTH: f32 = 200.0;
+/// Padding around each tile. The focus ring is drawn inside this margin, so it can never
+/// reach a neighboring tile or the row above.
+const RING_PAD: i8 = 6;
+const CELL_WIDTH: f32 = TILE_WIDTH + 2.0 * RING_PAD as f32;
 
 /// Per-machine startup state, read from the user's config directory and the environment.
 struct Startup {
@@ -803,7 +807,7 @@ impl eframe::App for App {
                 let order = browse::browse(&cards, &self.query);
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     let spacing = ui.spacing().item_spacing.x;
-                    let columns = ((ui.available_width() + spacing) / (TILE_WIDTH + spacing))
+                    let columns = ((ui.available_width() + spacing) / (CELL_WIDTH + spacing))
                         .floor()
                         .max(1.0) as usize;
                     self.columns = columns;
@@ -977,91 +981,96 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
         details: false,
         rect: egui::Rect::NOTHING,
     };
-    let tile_rect = ui.vertical(|ui| {
-        ui.set_width(TILE_WIDTH);
-        let size = egui::vec2(TILE_WIDTH, 150.0);
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-        action.clicked = response.clicked();
-        ui.painter()
-            .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
-        let cover = tile
-            .info
-            .and_then(|info| cover_path(game, info))
-            .filter(|path| path.exists());
-        match cover {
-            Some(path) => {
-                let uri = format!("file://{}", path.display());
-                ui.put(rect, egui::Image::new(uri).max_size(size));
-            }
-            None => {
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "No cover",
-                    egui::FontId::proportional(16.0),
-                    ui.visuals().weak_text_color(),
-                );
-            }
-        }
-        let title = tile
-            .info
-            .map_or(game.id.as_str(), |info| info.title.as_str());
-        // Reserve two title lines so the button rows line up across a grid row.
-        ui.vertical(|ui| {
-            ui.set_min_height(2.0 * ui.text_style_height(&egui::TextStyle::Body));
-            ui.add(egui::Label::new(egui::RichText::new(title).strong()).wrap());
+    let cell = egui::Frame::new()
+        .inner_margin(egui::Margin::same(RING_PAD))
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.set_width(TILE_WIDTH);
+                let size = egui::vec2(TILE_WIDTH, 150.0);
+                let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+                action.clicked = response.clicked();
+                ui.painter()
+                    .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
+                let cover = tile
+                    .info
+                    .and_then(|info| cover_path(game, info))
+                    .filter(|path| path.exists());
+                match cover {
+                    Some(path) => {
+                        let uri = format!("file://{}", path.display());
+                        ui.put(rect, egui::Image::new(uri).max_size(size));
+                    }
+                    None => {
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "No cover",
+                            egui::FontId::proportional(16.0),
+                            ui.visuals().weak_text_color(),
+                        );
+                    }
+                }
+                let title = tile
+                    .info
+                    .map_or(game.id.as_str(), |info| info.title.as_str());
+                // Reserve two title lines so the button rows line up across a grid row.
+                ui.vertical(|ui| {
+                    ui.set_min_height(2.0 * ui.text_style_height(&egui::TextStyle::Body));
+                    ui.add(egui::Label::new(egui::RichText::new(title).strong()).wrap());
+                });
+                if tile.running {
+                    ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
+                } else if tile.busy {
+                    ui.weak("Reloading...");
+                } else {
+                    match (&tile.entry.state, &tile.entry.extract) {
+                        (_, Err(msg)) | (Err(msg), _) => {
+                            ui.colored_label(egui::Color32::LIGHT_RED, msg);
+                        }
+                        (_, Ok(Status::NotExtracted)) => {
+                            ui.weak("not extracted");
+                        }
+                        (_, Ok(Status::ExtractManually(_))) => {
+                            ui.colored_label(egui::Color32::YELLOW, "extract manually");
+                        }
+                        (Ok(ExeState::NeedsExeChoice { .. }), _) => {
+                            ui.weak("needs exe choice");
+                        }
+                        (Ok(ExeState::Ready { .. }), _) => {
+                            ui.weak(" ");
+                        }
+                    }
+                }
+                if let Some(err) = tile.error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, err);
+                }
+                ui.horizontal(|ui| {
+                    let not_extracted = matches!(tile.entry.extract, Ok(Status::NotExtracted));
+                    let ready = matches!(tile.entry.state, Ok(ExeState::Ready { .. }));
+                    if tile.running {
+                        ui.add_enabled(false, egui::Button::new("Launch"));
+                    } else if not_extracted {
+                        if ui.button("Extract").clicked() {
+                            action.extract = Some(game.dir.clone());
+                        }
+                    } else {
+                        action.launch =
+                            ui.add_enabled(ready, egui::Button::new("Launch")).clicked();
+                    }
+                    action.details = ui.button("Details").clicked();
+                    action.favorite = ui
+                        .selectable_label(tile.entry.stats.favorite, "Fav")
+                        .clicked();
+                });
+            });
         });
-        if tile.running {
-            ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
-        } else if tile.busy {
-            ui.weak("Reloading...");
-        } else {
-            match (&tile.entry.state, &tile.entry.extract) {
-                (_, Err(msg)) | (Err(msg), _) => {
-                    ui.colored_label(egui::Color32::LIGHT_RED, msg);
-                }
-                (_, Ok(Status::NotExtracted)) => {
-                    ui.weak("not extracted");
-                }
-                (_, Ok(Status::ExtractManually(_))) => {
-                    ui.colored_label(egui::Color32::YELLOW, "extract manually");
-                }
-                (Ok(ExeState::NeedsExeChoice { .. }), _) => {
-                    ui.weak("needs exe choice");
-                }
-                (Ok(ExeState::Ready { .. }), _) => {
-                    ui.weak(" ");
-                }
-            }
-        }
-        if let Some(err) = tile.error {
-            ui.colored_label(egui::Color32::LIGHT_RED, err);
-        }
-        ui.horizontal(|ui| {
-            let not_extracted = matches!(tile.entry.extract, Ok(Status::NotExtracted));
-            let ready = matches!(tile.entry.state, Ok(ExeState::Ready { .. }));
-            if tile.running {
-                ui.add_enabled(false, egui::Button::new("Launch"));
-            } else if not_extracted {
-                if ui.button("Extract").clicked() {
-                    action.extract = Some(game.dir.clone());
-                }
-            } else {
-                action.launch = ui.add_enabled(ready, egui::Button::new("Launch")).clicked();
-            }
-            action.details = ui.button("Details").clicked();
-            action.favorite = ui
-                .selectable_label(tile.entry.stats.favorite, "Fav")
-                .clicked();
-        });
-    });
-    action.rect = tile_rect.response.rect;
+    action.rect = cell.response.rect;
     if tile.focused {
         ui.painter().rect_stroke(
-            action.rect.expand(3.0),
-            6.0,
+            action.rect,
+            8.0,
             egui::Stroke::new(3.0, egui::Color32::from_rgb(90, 170, 255)),
-            egui::StrokeKind::Outside,
+            egui::StrokeKind::Inside,
         );
     }
     action
