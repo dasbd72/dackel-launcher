@@ -22,6 +22,7 @@ fn saved_settings_round_trip_and_create_the_config_folder() {
         fullscreen: Some(true),
         blur_covers: true,
         debounce_ms: Some(50),
+        libraries: vec![PathBuf::from("/mnt/more/Games")],
     };
 
     save(&path, &wanted).unwrap();
@@ -132,4 +133,13 @@ fn an_absurd_debounce_window_is_capped() {
 #[test]
 fn debounce_is_unset_by_default() {
     assert_eq!(Settings::default().debounce_ms, None);
+}
+
+#[test]
+fn no_extra_libraries_by_default_and_old_files_still_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    fs::write(&path, br#"{"ui_scale": 1.5}"#).unwrap();
+
+    assert!(load(&path).libraries.is_empty());
 }

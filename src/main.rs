@@ -12,7 +12,7 @@ use dlsite_launcher::fonts;
 use dlsite_launcher::info::{GameInfo, cover_path, load};
 use dlsite_launcher::jobs::{ExtractJob, JobStatus};
 use dlsite_launcher::launch::{Launcher, UmuSpawner, unix_now};
-use dlsite_launcher::library::{Game, resolve_library, scan};
+use dlsite_launcher::library::{Game, add_library, library_labels, resolve_library, scan_all};
 use dlsite_launcher::nav::{
     self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Debounce, Input,
     Repeater,
@@ -211,6 +211,7 @@ enum Picker {
     Encoding,
     Scale,
     Debounce,
+    Library,
 }
 
 const SORTS: [Sort; 3] = [Sort::LastPlayed, Sort::Title, Sort::DateAdded];
@@ -224,7 +225,17 @@ struct PickerList {
 }
 
 struct App {
+    /// The library beside the binary (or `--library`); always first in `libraries`.
     library: PathBuf,
+    /// Every library in use: `library`, then the ones added on this machine.
+    libraries: Vec<PathBuf>,
+    /// Libraries that could not be read at the last scan (drive unplugged, folder gone).
+    offline: Vec<PathBuf>,
+    /// Show only games from this library.
+    library_filter: Option<PathBuf>,
+    libraries_open: bool,
+    library_input: String,
+    library_error: Option<String>,
     view: View,
     chooser: Option<usize>,
     encoding: Encoding,
@@ -274,8 +285,17 @@ struct App {
 
 impl App {
     fn new(library: PathBuf, startup: Startup) -> Self {
+        let libraries = std::iter::once(library.clone())
+            .chain(startup.settings.libraries.iter().cloned())
+            .collect();
         let mut app = App {
             library,
+            libraries,
+            offline: Vec::new(),
+            library_filter: None,
+            libraries_open: false,
+            library_input: String::new(),
+            library_error: None,
             view: View::Missing,
             chooser: None,
             encoding: Encoding::Auto,
@@ -325,14 +345,40 @@ impl App {
     fn rescan(&mut self) {
         self.chooser = None;
         let extracting: HashSet<String> = self.extracting.keys().cloned().collect();
-        self.view = match scan(&self.library) {
-            Ok(games) => View::Games(
+        let scans = scan_all(&self.libraries);
+        self.offline = scans
+            .iter()
+            .filter(|s| s.games.is_err())
+            .map(|s| s.root.clone())
+            .collect();
+        let primary_error = scans
+            .first()
+            .and_then(|s| s.games.as_ref().err())
+            .map(|err| (err.kind(), err.to_string()));
+        let games: Vec<Game> = scans
+            .into_iter()
+            .filter_map(|s| s.games.ok())
+            .flatten()
+            .collect();
+        self.view = match primary_error {
+            // Nothing readable at all: the built-in library's own problem is the one to show.
+            Some((kind, _))
+                if games.is_empty()
+                    && kind == ErrorKind::NotFound
+                    && self.offline.len() == self.libraries.len() =>
+            {
+                View::Missing
+            }
+            Some((_, msg)) if games.is_empty() && self.offline.len() == self.libraries.len() => {
+                View::Error(msg)
+            }
+            _ => View::Games(
                 games
                     .into_iter()
                     .map(|game| {
                         // A folder being extracted is half built: do not detect (and pin) an
                         // exe from it yet. The rescan after the job finishes does that.
-                        let state = if extracting.contains(&game.id) {
+                        let state = if extracting.contains(&game.key()) {
                             Ok(ExeState::NeedsExeChoice {
                                 candidates: Vec::new(),
                             })
@@ -354,9 +400,24 @@ impl App {
                     })
                     .collect(),
             ),
-            Err(err) if err.kind() == ErrorKind::NotFound => View::Missing,
-            Err(err) => View::Error(err.to_string()),
         };
+        // Drop a stale "not found" note; never replace some other message (e.g. "Extracted").
+        if self
+            .message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("Library not found"))
+        {
+            self.message = None;
+        }
+        if !self.offline.is_empty() && self.message.is_none() && matches!(self.view, View::Games(_))
+        {
+            let names: Vec<String> = self
+                .offline
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
+            self.message = Some(format!("Library not found: {}", names.join(", ")));
+        }
         let games: Vec<Game> = match &self.view {
             View::Games(entries) => entries.iter().map(|e| e.game.clone()).collect(),
             _ => return,
@@ -364,7 +425,7 @@ impl App {
         for game in games {
             match load(&game) {
                 Some(info) => {
-                    self.infos.insert(game.id.clone(), info);
+                    self.infos.insert(game.key(), info);
                 }
                 None => self.reload(game),
             }
@@ -372,24 +433,25 @@ impl App {
     }
 
     fn reload(&mut self, game: Game) {
-        if self.busy.insert(game.id.clone()) {
-            self.errors.remove(&game.id);
+        let key = game.key();
+        if self.busy.insert(key.clone()) {
+            self.errors.remove(&key);
             self.reloads.start(game);
         }
     }
 
     fn collect_reloads(&mut self) {
         while let Some(done) = self.reloads.try_next() {
-            self.busy.remove(&done.id);
+            self.busy.remove(&done.key);
             // A reload may have replaced the cover, so any blurred copy of it is stale.
             self.blur_cache.clear();
             match done.result {
                 Ok(info) => {
-                    self.errors.remove(&done.id);
-                    self.infos.insert(done.id, info);
+                    self.errors.remove(&done.key);
+                    self.infos.insert(done.key, info);
                 }
                 Err(msg) => {
-                    self.errors.insert(done.id, msg);
+                    self.errors.insert(done.key, msg);
                 }
             }
         }
@@ -397,9 +459,10 @@ impl App {
 
     /// Starts extracting in the background; progress shows on the tile and details page.
     fn extract_game(&mut self, dir: &std::path::Path) {
-        let Some(id) = dir.file_name().map(|n| n.to_string_lossy().into_owned()) else {
-            return;
-        };
+        let id = dir.to_string_lossy().into_owned();
+        let name = dir
+            .file_name()
+            .map_or_else(|| id.clone(), |n| n.to_string_lossy().into_owned());
         if self.extracting.contains_key(&id) {
             return;
         }
@@ -410,14 +473,14 @@ impl App {
             ctx.request_repaint()
         });
         self.extracting.insert(id.clone(), job);
-        self.message = Some(format!("Extracting {id}..."));
+        self.message = Some(format!("Extracting {name}..."));
     }
 
     /// Asks a running extraction to stop; it removes what it created once it has.
     fn cancel_extraction(&mut self, id: &str) {
         if let Some(job) = self.extracting.get(id) {
             job.cancel();
-            self.message = Some(format!("Cancelling {id}..."));
+            self.message = Some(format!("Cancelling {}...", file_name_of(id)));
         }
     }
 
@@ -437,11 +500,16 @@ impl App {
             self.extracting.remove(&id);
             self.message = Some(match status {
                 JobStatus::Finished(Ok(())) => {
-                    format!("Extracted {}", self.library.join(&id).display())
+                    format!("Extracted {id}")
                 }
-                JobStatus::Finished(Err(err)) => format!("Extract failed ({id}): {err}"),
+                JobStatus::Finished(Err(err)) => {
+                    format!("Extract failed ({}): {err}", file_name_of(&id))
+                }
                 JobStatus::Cancelled => {
-                    format!("Cancelled extracting {id}; removed what it had created")
+                    format!(
+                        "Cancelled extracting {}; removed what it had created",
+                        file_name_of(&id)
+                    )
                 }
                 JobStatus::Running(_) => continue,
             });
@@ -486,7 +554,7 @@ impl App {
         let View::Games(entries) = &mut self.view else {
             return;
         };
-        let Some(entry) = entries.iter_mut().find(|e| e.game.id == id) else {
+        let Some(entry) = entries.iter_mut().find(|e| e.game.key() == id) else {
             return;
         };
         let favorite = !entry.stats.favorite;
@@ -503,9 +571,28 @@ impl App {
         };
         let cards: Vec<Card> = entries
             .iter()
-            .map(|e| card_of(e, self.infos.get(&e.game.id)))
+            .map(|e| card_of(e, self.infos.get(&e.game.key())))
             .collect();
         browse::browse(&cards, &self.query)
+            .into_iter()
+            .filter(|&i| {
+                self.library_filter
+                    .as_deref()
+                    .is_none_or(|root| entries[i].game.dir.parent() == Some(root))
+            })
+            .collect()
+    }
+
+    /// The name to show beside a game's library; `None` with a single library.
+    fn library_label(&self, game: &Game) -> Option<String> {
+        if self.libraries.len() < 2 {
+            return None;
+        }
+        let at = self
+            .libraries
+            .iter()
+            .position(|root| game.dir.parent() == Some(root.as_path()))?;
+        library_labels(&self.libraries).into_iter().nth(at)
     }
 
     /// Keeps the cursor on a game that is on screen, so focus is never lost.
@@ -513,9 +600,9 @@ impl App {
         let View::Games(entries) = &self.view else {
             return;
         };
-        let on_screen = |id: &String| visible.iter().any(|&i| &entries[i].game.id == id);
+        let on_screen = |id: &String| visible.iter().any(|&i| &entries[i].game.key() == id);
         if self.focus_auto || !self.focus_id.as_ref().is_some_and(on_screen) {
-            self.focus_id = visible.first().map(|&i| entries[i].game.id.clone());
+            self.focus_id = visible.first().map(|&i| entries[i].game.key().clone());
         }
     }
 
@@ -528,11 +615,11 @@ impl App {
             Screen::Details(id) => Some(id),
             Screen::Grid => self.focus_id.as_ref(),
         }?;
-        entries.iter().position(|e| &e.game.id == id)
+        entries.iter().position(|e| &e.game.key() == id)
     }
 
     fn context(&self) -> Context {
-        if self.chooser.is_some() || self.picker.is_some() {
+        if self.chooser.is_some() || self.picker.is_some() || self.libraries_open {
             Context::Chooser
         } else if matches!(self.screen, Screen::Details(_)) {
             Context::Details
@@ -572,6 +659,91 @@ impl App {
         self.settings.ui_scale = Some(scale);
         self.zoom_request = Some(scale);
         self.save_settings();
+    }
+
+    /// The manager for the extra libraries: list them, add a typed path, remove one.
+    fn libraries_window(&mut self, ctx: &egui::Context) {
+        let mut remove: Option<usize> = None;
+        let mut add = false;
+        let mut close = false;
+        egui::Window::new("Libraries")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                for (i, root) in self.libraries.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(root.display().to_string());
+                        if self.offline.contains(root) {
+                            ui.colored_label(egui::Color32::YELLOW, "not found");
+                        }
+                        if i == 0 {
+                            ui.weak("(beside the program)");
+                        } else if ui.button("Remove").clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                }
+                ui.separator();
+                ui.label("Add a folder that contains RJ game folders:");
+                ui.horizontal(|ui| {
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(&mut self.library_input)
+                            .desired_width(420.0)
+                            .hint_text("/path/to/DLSiteLibrary"),
+                    );
+                    let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if ui.button("Add").clicked() || enter {
+                        add = true;
+                    }
+                });
+                if let Some(err) = &self.library_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, err);
+                }
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+        if add {
+            match add_library(&self.libraries, &self.library_input) {
+                Ok(path) => {
+                    self.settings.libraries.push(path.clone());
+                    self.libraries.push(path);
+                    self.library_input.clear();
+                    self.library_error = None;
+                    self.save_settings();
+                    self.rescan();
+                }
+                Err(err) => self.library_error = Some(err.to_string()),
+            }
+        }
+        if let Some(i) = remove {
+            let gone = self.libraries.remove(i);
+            self.settings.libraries.retain(|l| *l != gone);
+            if self.library_filter.as_ref() == Some(&gone) {
+                self.library_filter = None;
+            }
+            // Games of the removed library: stop extracting them and leave their page.
+            let inside = |key: &str| std::path::Path::new(key).parent() == Some(gone.as_path());
+            let running: Vec<String> = self
+                .extracting
+                .keys()
+                .filter(|k| inside(k))
+                .cloned()
+                .collect();
+            for key in running {
+                self.cancel_extraction(&key);
+            }
+            if matches!(&self.screen, Screen::Details(key) if inside(key)) {
+                self.close_details_page();
+            }
+            self.save_settings();
+            self.rescan();
+        }
+        if close {
+            self.libraries_open = false;
+            self.library_error = None;
+        }
     }
 
     fn set_debounce(&mut self, ms: u64) {
@@ -619,6 +791,20 @@ impl App {
                     .position(|e| *e == self.encoding)
                     .unwrap_or(0),
             },
+            Picker::Library => {
+                let mut labels = vec!["All libraries".to_owned()];
+                labels.extend(library_labels(&self.libraries));
+                let current = self
+                    .library_filter
+                    .as_ref()
+                    .and_then(|f| self.libraries.iter().position(|l| l == f))
+                    .map_or(0, |i| i + 1);
+                PickerList {
+                    title: "Library",
+                    labels,
+                    current,
+                }
+            }
             Picker::Debounce => PickerList {
                 title: "Press debounce",
                 labels: DEBOUNCE_PRESETS_MS
@@ -660,6 +846,12 @@ impl App {
                 if let Some(e) = ENCODINGS.get(index) {
                     self.encoding = *e;
                 }
+            }
+            Picker::Library => {
+                self.library_filter = index
+                    .checked_sub(1)
+                    .and_then(|i| self.libraries.get(i))
+                    .cloned();
             }
             Picker::Debounce => {
                 if let Some(ms) = DEBOUNCE_PRESETS_MS.get(index) {
@@ -707,6 +899,7 @@ impl App {
                         Control::Encoding => self.open_picker(Picker::Encoding),
                         Control::Scale => self.open_picker(Picker::Scale),
                         Control::Debounce => self.open_picker(Picker::Debounce),
+                        Control::LibraryFilter => self.open_picker(Picker::Library),
                         other => self.pending_press = Some(other),
                     }
                     return;
@@ -717,7 +910,8 @@ impl App {
                 };
                 let entry = &entries[i];
                 let dir = entry.game.dir.clone();
-                if self.launcher.is_running(&dir) || self.extracting.contains_key(&entry.game.id) {
+                if self.launcher.is_running(&dir) || self.extracting.contains_key(&entry.game.key())
+                {
                     return;
                 }
                 if matches!(entry.extract, Ok(Status::NotExtracted)) {
@@ -753,7 +947,7 @@ impl App {
             Command::Back => self.close_details_page(),
             Command::ToggleFavorite => {
                 if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view) {
-                    let id = entries[i].game.id.clone();
+                    let id = entries[i].game.key().clone();
                     self.toggle_favorite(&id);
                 }
             }
@@ -798,6 +992,7 @@ impl App {
             Command::ChooserCancel => {
                 self.chooser = None;
                 self.picker = None;
+                self.libraries_open = false;
             }
             Command::ToggleFullscreen => self.toggle_fullscreen(),
             Command::ToggleBlur => self.toggle_blur(),
@@ -968,6 +1163,10 @@ impl eframe::App for App {
                 if frame.pressed(ui, Control::Rescan, &response, true) {
                     rescan = true;
                 }
+                let response = ui.button("Libraries");
+                if frame.pressed(ui, Control::Libraries, &response, true) {
+                    self.libraries_open = true;
+                }
                 let response = ui.button("Fullscreen");
                 fullscreen_click = frame.pressed(ui, Control::Fullscreen, &response, true);
                 let response = ui
@@ -1029,6 +1228,36 @@ impl eframe::App for App {
                         .response
                         .on_hover_text(SORT_HELP);
                     frame.register(ui, Control::Sort, &response);
+                    if self.libraries.len() > 1 {
+                        let labels = library_labels(&self.libraries);
+                        let shown = self
+                            .library_filter
+                            .as_ref()
+                            .and_then(|f| self.libraries.iter().position(|l| l == f))
+                            .map_or("All libraries", |i| labels[i].as_str());
+                        let response = egui::ComboBox::from_id_salt("library-filter")
+                            .selected_text(shown)
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_label(
+                                        self.library_filter.is_none(),
+                                        "All libraries",
+                                    )
+                                    .clicked()
+                                {
+                                    self.library_filter = None;
+                                }
+                                for (root, label) in self.libraries.iter().zip(&labels) {
+                                    let on = self.library_filter.as_ref() == Some(root);
+                                    if ui.selectable_label(on, label).clicked() {
+                                        self.library_filter = Some(root.clone());
+                                    }
+                                }
+                            })
+                            .response
+                            .on_hover_text("Show games from one library");
+                        frame.register(ui, Control::LibraryFilter, &response);
+                    }
                     ui.label("Search");
                     ui.text_edit_singleline(&mut self.query.text);
                     let response = ui.checkbox(&mut self.query.favorites_only, "Favorites only");
@@ -1082,9 +1311,9 @@ impl eframe::App for App {
                 ui.colored_label(egui::Color32::LIGHT_RED, msg);
             }
             (Screen::Details(id), View::Games(entries))
-                if entries.iter().any(|e| &e.game.id == id) =>
+                if entries.iter().any(|e| &e.game.key() == id) =>
             {
-                let entry = entries.iter().find(|e| &e.game.id == id).unwrap();
+                let entry = entries.iter().find(|e| &e.game.key() == id).unwrap();
                 let info = self.infos.get(id);
                 let cover = info
                     .and_then(|info| cover_path(&entry.game, info))
@@ -1093,7 +1322,8 @@ impl eframe::App for App {
                     self.blur_cache
                         .cover_view(&ctx, self.settings.blur_covers, cover.as_deref());
                 let view = DetailsView {
-                    id,
+                    id: &entry.game.id,
+                    library: self.library_label(&entry.game),
                     info,
                     cover,
                     cover_view,
@@ -1121,7 +1351,7 @@ impl eframe::App for App {
                     cancel_ids.push(id.clone());
                 }
                 if action.launch {
-                    launch = entries.iter().position(|e| &e.game.id == id);
+                    launch = entries.iter().position(|e| &e.game.key() == id);
                 }
                 if action.toggle_favorite {
                     favorite_id = Some(id.clone());
@@ -1134,11 +1364,8 @@ impl eframe::App for App {
                 ui.label("No games yet. Put RJ folders in the library and press Rescan.");
             }
             (_, View::Games(entries)) => {
-                let cards: Vec<Card> = entries
-                    .iter()
-                    .map(|e| card_of(e, self.infos.get(&e.game.id)))
-                    .collect();
-                let order = browse::browse(&cards, &self.query);
+                // The same list the controller moves through, library filter included.
+                let order = self.visible();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -1152,7 +1379,7 @@ impl eframe::App for App {
                                     let entry = &entries[i];
                                     let cover_file = self
                                         .infos
-                                        .get(&entry.game.id)
+                                        .get(&entry.game.key())
                                         .and_then(|info| cover_path(&entry.game, info))
                                         .filter(|path| path.exists());
                                     let cover_view = self.blur_cache.cover_view(
@@ -1162,22 +1389,25 @@ impl eframe::App for App {
                                     );
                                     let tile = Tile {
                                         entry,
-                                        info: self.infos.get(&entry.game.id),
-                                        error: self.errors.get(&entry.game.id).map(String::as_str),
-                                        busy: self.busy.contains(&entry.game.id),
+                                        info: self.infos.get(&entry.game.key()),
+                                        error: self
+                                            .errors
+                                            .get(&entry.game.key())
+                                            .map(String::as_str),
+                                        busy: self.busy.contains(&entry.game.key()),
                                         running: self.launcher.is_running(&entry.game.dir),
                                         extracting: self
                                             .extracting
-                                            .get(&entry.game.id)
+                                            .get(&entry.game.key())
                                             .map(ExtractJob::progress),
                                         focused: self.control_focus.is_none()
-                                            && self.focus_id.as_ref() == Some(&entry.game.id),
+                                            && self.focus_id.as_ref() == Some(&entry.game.key()),
                                         cover_file,
                                         cover_view,
                                     };
                                     let action = tile_ui(ui, &tile);
                                     frame.items.push(Item {
-                                        target: Target::Game(entry.game.id.clone()),
+                                        target: Target::Game(entry.game.key().clone()),
                                         rect: action.rect,
                                     });
                                     if tile.focused && self.scroll_to_focus {
@@ -1189,7 +1419,7 @@ impl eframe::App for App {
                                         || action.favorite
                                         || action.extract.is_some()
                                     {
-                                        clicked_focus = Some(entry.game.id.clone());
+                                        clicked_focus = Some(entry.game.key().clone());
                                     }
                                     if let Some(dir) = action.extract {
                                         extract_dir = Some(dir);
@@ -1198,18 +1428,18 @@ impl eframe::App for App {
                                         launch = Some(i);
                                     }
                                     if action.cancel_extract {
-                                        cancel_ids.push(entry.game.id.clone());
+                                        cancel_ids.push(entry.game.key().clone());
                                     }
                                     if action.favorite {
-                                        favorite_id = Some(entry.game.id.clone());
+                                        favorite_id = Some(entry.game.key().clone());
                                     }
                                     if action.details {
-                                        open_details = Some(entry.game.id.clone());
+                                        open_details = Some(entry.game.key().clone());
                                     }
                                     // One click only moves the focus (done above); two open the
                                     // details page, which works for any game, extracted or not.
                                     if action.double_clicked {
-                                        open_details = Some(entry.game.id.clone());
+                                        open_details = Some(entry.game.key().clone());
                                     }
                                 }
                             });
@@ -1245,6 +1475,10 @@ impl eframe::App for App {
                 Some(PickerEvent::Cancel) => picker_cancel = true,
                 None => {}
             }
+        }
+
+        if self.libraries_open {
+            self.libraries_window(ui.ctx());
         }
 
         self.nav_items = std::mem::take(&mut frame.items);
@@ -1603,4 +1837,11 @@ fn picker_window(ctx: &egui::Context, list: &PickerList, selected: usize) -> Opt
             });
         });
     event
+}
+
+/// The last component of a path kept as text, for messages.
+fn file_name_of(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map_or_else(|| path.to_owned(), |n| n.to_string_lossy().into_owned())
 }

@@ -23,6 +23,8 @@ pub struct Settings {
     /// Window (ms) inside which a repeated press of one button counts once; `None` means
     /// the default. Steam Input can report each press twice.
     pub debounce_ms: Option<u64>,
+    /// Extra library folders added on this machine, besides the one beside the binary.
+    pub libraries: Vec<PathBuf>,
 }
 
 /// Loads settings; a missing or unreadable file gives the defaults, so a bad

@@ -6,7 +6,8 @@ use std::thread;
 
 /// Outcome of one background refresh, delivered back to the UI thread.
 pub struct Finished {
-    pub id: String,
+    /// `Game::key` of the refreshed game.
+    pub key: String,
     pub result: Result<GameInfo, String>,
 }
 
@@ -29,7 +30,7 @@ impl Reloads {
         thread::spawn(move || {
             let result = refresh(&game, fetch.as_ref()).map_err(|err| err.to_string());
             let _ = tx.send(Finished {
-                id: game.id.clone(),
+                key: game.key(),
                 result,
             });
         });

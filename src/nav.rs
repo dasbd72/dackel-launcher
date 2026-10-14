@@ -59,12 +59,14 @@ pub enum Command {
 pub enum Control {
     // Toolbar.
     Rescan,
+    Libraries,
     Fullscreen,
     Blur,
     Scale,
     Debounce,
     Encoding,
     Sort,
+    LibraryFilter,
     FavoritesOnly,
     // Details page.
     Back,

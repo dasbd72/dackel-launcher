@@ -28,6 +28,8 @@ fn row_label(ui: &mut egui::Ui, text: &str, pad_top: f32) {
 
 pub struct DetailsView<'a> {
     pub id: &'a str,
+    /// Which library the game is in; only given when there is more than one.
+    pub library: Option<String>,
     pub info: Option<&'a GameInfo>,
     pub cover: Option<PathBuf>,
     pub cover_view: CoverView,
@@ -151,6 +153,12 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView, frame: &mut FocusFrame)
                 .spacing([16.0, 6.0])
                 .show(ui, |ui| {
                     let chip_pad = f32::from(CHIP_PAD_Y);
+
+                    if let Some(library) = &view.library {
+                        row_label(ui, "Library", 0.0);
+                        ui.label(library);
+                        ui.end_row();
+                    }
 
                     row_label(ui, "Circle", chip_pad);
                     match view.info.and_then(|i| i.circle.as_deref()) {
