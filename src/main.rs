@@ -87,7 +87,7 @@ fn main() -> eframe::Result {
 }
 
 /// Points per second the details page scrolls with the stick pushed all the way.
-const PAD_SCROLL_SPEED: f32 = 900.0;
+const PAD_SCROLL_SPEED: f32 = 500.0;
 const TILE_WIDTH: f32 = 200.0;
 
 const DEBOUNCE_HELP: &str = "Press debounce\n\
