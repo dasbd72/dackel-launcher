@@ -10,3 +10,5 @@ pub mod nav;
 pub mod profile;
 pub mod proton;
 pub mod reload;
+pub mod settings;
+pub mod window;

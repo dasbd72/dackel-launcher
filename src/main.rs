@@ -12,6 +12,8 @@ use dlsite_launcher::nav::{self, Command, Context, Input, Repeater};
 use dlsite_launcher::profile::{self, ExeState, Stats};
 use dlsite_launcher::proton;
 use dlsite_launcher::reload::Reloads;
+use dlsite_launcher::settings::{self, Settings};
+use dlsite_launcher::window;
 use eframe::egui;
 use gilrs::{Axis, Button, EventType, Gilrs};
 use std::collections::{HashMap, HashSet};
@@ -37,8 +39,11 @@ fn main() -> eframe::Result {
         }
     };
 
+    let startup = Startup::detect();
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 720.0])
+            .with_fullscreen(startup.fullscreen),
         ..Default::default()
     };
     eframe::run_native(
@@ -47,12 +52,44 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
             install_japanese_font(&cc.egui_ctx);
-            Ok(Box::new(App::new(library)))
+            cc.egui_ctx.set_zoom_factor(startup.scale);
+            Ok(Box::new(App::new(library, startup)))
         }),
     )
 }
 
 const TILE_WIDTH: f32 = 200.0;
+
+/// Per-machine startup state, read from the user's config directory and the environment.
+struct Startup {
+    settings: Settings,
+    settings_path: Option<PathBuf>,
+    deck_like: bool,
+    fullscreen: bool,
+    scale: f32,
+}
+
+impl Startup {
+    fn detect() -> Self {
+        let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let settings_path = settings::settings_path(xdg.as_deref(), home.as_deref());
+        let settings = settings_path
+            .as_deref()
+            .map(settings::load)
+            .unwrap_or_default();
+        let deck_like = window::is_deck_like(|key| std::env::var(key).ok());
+        Startup {
+            fullscreen: window::initial_fullscreen(&settings, deck_like),
+            scale: settings
+                .ui_scale
+                .unwrap_or_else(|| window::default_ui_scale(deck_like)),
+            settings,
+            settings_path,
+            deck_like,
+        }
+    }
+}
 
 /// egui's built-in fonts have no Japanese glyphs; add a system font as a fallback.
 fn install_japanese_font(ctx: &egui::Context) {
@@ -141,10 +178,18 @@ struct App {
     chooser_sel: usize,
     columns: usize,
     scroll_to_focus: bool,
+    settings: Settings,
+    settings_path: Option<PathBuf>,
+    deck_like: bool,
+    fullscreen: bool,
+    scale: f32,
+    /// Window changes decided in `apply`, sent to egui at the end of the frame.
+    window_cmds: Vec<egui::ViewportCommand>,
+    zoom_request: Option<f32>,
 }
 
 impl App {
-    fn new(library: PathBuf) -> Self {
+    fn new(library: PathBuf, startup: Startup) -> Self {
         let mut app = App {
             library,
             view: View::Missing,
@@ -171,6 +216,13 @@ impl App {
             chooser_sel: 0,
             columns: 1,
             scroll_to_focus: false,
+            settings: startup.settings,
+            settings_path: startup.settings_path,
+            deck_like: startup.deck_like,
+            fullscreen: startup.fullscreen,
+            scale: startup.scale,
+            window_cmds: Vec::new(),
+            zoom_request: None,
         };
         app.rescan();
         app
@@ -263,7 +315,14 @@ impl App {
                     .launcher
                     .start(&entry.game.dir, state, proton.as_deref(), unix_now())
                 {
-                    Ok(()) => format!("Launched {}", entry.game.id),
+                    Ok(()) => {
+                        if self.deck_like {
+                            // Hand the screen to the game; minimize rather than close.
+                            self.window_cmds
+                                .push(egui::ViewportCommand::Minimized(true));
+                        }
+                        format!("Launched {}", entry.game.id)
+                    }
                     Err(err) => format!("Launch failed: {err}"),
                 }
             }
@@ -327,6 +386,34 @@ impl App {
         } else {
             Context::Grid
         }
+    }
+
+    fn save_settings(&mut self) {
+        let Some(path) = &self.settings_path else {
+            return;
+        };
+        if let Err(err) = settings::save(path, &self.settings) {
+            self.message = Some(format!("Could not save settings: {err}"));
+        }
+    }
+
+    fn toggle_fullscreen(&mut self) {
+        self.fullscreen = !self.fullscreen;
+        self.settings.fullscreen = Some(self.fullscreen);
+        self.window_cmds
+            .push(egui::ViewportCommand::Fullscreen(self.fullscreen));
+        self.save_settings();
+    }
+
+    fn set_ui_scale(&mut self, scale: f32) {
+        self.scale = scale;
+        self.settings.ui_scale = Some(scale);
+        self.zoom_request = Some(scale);
+        self.save_settings();
+    }
+
+    fn cycle_ui_scale(&mut self) {
+        self.set_ui_scale(window::next_scale(self.scale));
     }
 
     fn open_chooser(&mut self, index: usize) {
@@ -444,6 +531,8 @@ impl App {
                 }
             }
             Command::ChooserCancel => self.chooser = None,
+            Command::ToggleFullscreen => self.toggle_fullscreen(),
+            Command::CycleUiScale => self.cycle_ui_scale(),
         }
     }
 
@@ -502,6 +591,12 @@ impl eframe::App for App {
         // Commands can rescan or re-sort; make sure the cursor is still on a visible game.
         let visible = self.visible();
         self.normalize_focus(&visible);
+        // Apply a requested zoom; otherwise notice egui's own Ctrl +/- zoom and remember it.
+        if let Some(zoom) = self.zoom_request.take() {
+            ctx.set_zoom_factor(zoom);
+        } else if (ctx.zoom_factor() - self.scale).abs() > 1e-3 {
+            self.set_ui_scale(ctx.zoom_factor());
+        }
 
         let mut rescan = false;
         let mut extract_dir: Option<PathBuf> = None;
@@ -528,11 +623,25 @@ impl eframe::App for App {
             ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
 
+        let mut scale_edit = self.scale;
+        let mut scale_dragging = false;
+        let mut scale_done = false;
+        let mut fullscreen_click = false;
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("Rescan").clicked() {
                     rescan = true;
                 }
+                fullscreen_click = ui.button("Fullscreen").clicked();
+                let scale = ui.add(
+                    egui::DragValue::new(&mut scale_edit)
+                        .range(0.5..=3.0)
+                        .speed(0.01)
+                        .fixed_decimals(2)
+                        .prefix("UI x"),
+                );
+                scale_dragging = scale.changed();
+                scale_done = scale.drag_stopped() || scale.lost_focus();
                 egui::ComboBox::from_label("Zip encoding")
                     .selected_text(encoding_label(self.encoding))
                     .show_ui(ui, |ui| {
@@ -561,14 +670,26 @@ impl eframe::App for App {
             }
         });
 
+        if fullscreen_click {
+            self.toggle_fullscreen();
+        }
+        if scale_dragging {
+            self.scale = scale_edit;
+            self.settings.ui_scale = Some(scale_edit);
+            self.zoom_request = Some(scale_edit);
+        }
+        if scale_done {
+            self.save_settings();
+        }
+
         let hint = match self.context() {
             Context::Grid => {
-                "A Launch   B Reset filters   X Reload   Y Details   LB/RB Sort   LT/RT Zip encoding   Select Favorites only   Start Rescan"
+                "A Launch   B Reset filters   X Reload   Y Details   LB/RB Sort   LT/RT Zip encoding   Select Favorites only   Start Rescan   R3/F11 Fullscreen   L3 UI scale"
             }
             Context::Details => {
-                "A Launch   B Back   X Reload   Y Favorite   LB Choose exe   RB Re-extract   Start Rescan"
+                "A Launch   B Back   X Reload   Y Favorite   LB Choose exe   RB Re-extract   Start Rescan   R3/F11 Fullscreen   L3 UI scale"
             }
-            Context::Chooser => "Up/Down Select   A Pick   B Cancel",
+            Context::Chooser => "Up/Down Select   A Pick   B Cancel   R3/F11 Fullscreen",
         };
         egui::Panel::bottom("hints").show(ui, |ui| {
             ui.weak(hint);
@@ -746,6 +867,9 @@ impl eframe::App for App {
         } else if rescan {
             self.rescan();
         }
+        for command in self.window_cmds.drain(..) {
+            ctx.send_viewport_cmd(command);
+        }
     }
 }
 
@@ -916,6 +1040,7 @@ const KEYBOARD: &[(egui::Key, Input)] = &[
     (egui::Key::R, Input::X),
     (egui::Key::D, Input::Y),
     (egui::Key::F5, Input::Start),
+    (egui::Key::F11, Input::RightStickClick),
 ];
 
 fn pad_input(button: Button) -> Option<Input> {
@@ -934,6 +1059,8 @@ fn pad_input(button: Button) -> Option<Input> {
         Button::RightTrigger2 => Input::RightTrigger,
         Button::Start => Input::Start,
         Button::Select => Input::Select,
+        Button::LeftThumb => Input::LeftStickClick,
+        Button::RightThumb => Input::RightStickClick,
         _ => return None,
     })
 }

@@ -206,3 +206,23 @@ mod stick {
         );
     }
 }
+
+mod window_controls {
+    use dlsite_launcher::nav::{Command, Context, Input, command};
+
+    #[test]
+    fn stick_clicks_toggle_fullscreen_and_cycle_the_ui_scale_everywhere() {
+        for context in [Context::Grid, Context::Details, Context::Chooser] {
+            assert_eq!(
+                command(context, Input::RightStickClick),
+                Some(Command::ToggleFullscreen),
+                "{context:?}"
+            );
+            assert_eq!(
+                command(context, Input::LeftStickClick),
+                Some(Command::CycleUiScale),
+                "{context:?}"
+            );
+        }
+    }
+}
