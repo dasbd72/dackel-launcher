@@ -22,6 +22,8 @@ struct Profile {
     /// Unix time (seconds) of the most recent launch.
     #[serde(default)]
     last_played: Option<u64>,
+    #[serde(default)]
+    favorite: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +53,31 @@ pub fn add_play_time(game_dir: &Path, secs: u64) -> io::Result<()> {
     })
 }
 
+/// User-facing state kept in the profile besides the exe choice.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Stats {
+    pub favorite: bool,
+    /// Unix seconds of the last launch.
+    pub last_played: Option<u64>,
+    /// Total play time in seconds; `None` until the game has been played.
+    pub play_time_secs: Option<u64>,
+}
+
+/// Reads the profile's stats; a game without a profile has the defaults.
+pub fn read_stats(game_dir: &Path) -> io::Result<Stats> {
+    let profile = read_profile(game_dir)?.unwrap_or_default();
+    Ok(Stats {
+        favorite: profile.favorite,
+        last_played: profile.last_played,
+        play_time_secs: (profile.play_time_secs > 0).then_some(profile.play_time_secs),
+    })
+}
+
+/// Marks or unmarks a game as a favorite, keeping every other profile field.
+pub fn set_favorite(game_dir: &Path, favorite: bool) -> io::Result<()> {
+    update_profile(game_dir, |p| p.favorite = favorite)
+}
+
 fn update_profile(game_dir: &Path, change: impl FnOnce(&mut Profile)) -> io::Result<()> {
     let mut profile = read_profile(game_dir)?.unwrap_or_default();
     change(&mut profile);
@@ -63,30 +90,18 @@ pub fn ensure(game_dir: &Path) -> io::Result<ExeState> {
     }
 
     if let Some(exe) = legacy_hint(game_dir)? {
-        write_profile(
-            game_dir,
-            &Profile {
-                exe: Some(exe.clone()),
-                ..Default::default()
-            },
-        )?;
+        write_exe(game_dir, Some(exe.clone()))?;
         return Ok(ExeState::Ready { exe });
     }
 
     let candidates = find_candidates(game_dir)?;
     match pick(&candidates) {
         Some(exe) => {
-            write_profile(
-                game_dir,
-                &Profile {
-                    exe: Some(exe.clone()),
-                    ..Default::default()
-                },
-            )?;
+            write_exe(game_dir, Some(exe.clone()))?;
             Ok(ExeState::Ready { exe })
         }
         None => {
-            write_profile(game_dir, &Profile::default())?;
+            write_exe(game_dir, None)?;
             Ok(ExeState::NeedsExeChoice {
                 candidates: candidates.into_iter().map(|c| c.rel).collect(),
             })
@@ -105,6 +120,11 @@ fn read_profile(game_dir: &Path) -> io::Result<Option<Profile>> {
     }
 }
 
+/// Sets the exe, keeping every other profile field (favorite, play time, ...).
+fn write_exe(game_dir: &Path, exe: Option<PathBuf>) -> io::Result<()> {
+    update_profile(game_dir, |p| p.exe = exe)
+}
+
 fn write_profile(game_dir: &Path, profile: &Profile) -> io::Result<()> {
     let dir = game_dir.join(META_DIR);
     std::fs::create_dir_all(&dir)?;
@@ -121,11 +141,13 @@ pub fn choose(game_dir: &Path, exe: &Path) -> io::Result<()> {
             format!("{} is not a detected exe", exe.display()),
         ));
     }
-    write_profile(
-        game_dir,
-        &Profile {
-            exe: Some(exe.to_path_buf()),
-            ..Default::default()
-        },
-    )
+    write_exe(game_dir, Some(exe.to_path_buf()))
+}
+
+/// Every exe a user may pick for this game, relative to the game folder.
+pub fn candidates(game_dir: &Path) -> io::Result<Vec<PathBuf>> {
+    Ok(find_candidates(game_dir)?
+        .into_iter()
+        .map(|c| c.rel)
+        .collect())
 }

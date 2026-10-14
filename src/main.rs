@@ -1,17 +1,21 @@
+mod details;
+
+use details::{DetailsView, details_ui, exe_choices};
+use dlsite_launcher::browse::{self, Card, Query, Sort};
 use dlsite_launcher::extract::{self, Encoding, Status};
 use dlsite_launcher::fetch::HttpFetch;
 use dlsite_launcher::info::{GameInfo, cover_path, load};
 use dlsite_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dlsite_launcher::library::{Game, resolve_library, scan};
-use dlsite_launcher::profile::{self, ExeState};
+use dlsite_launcher::profile::{self, ExeState, Stats};
 use dlsite_launcher::proton;
 use dlsite_launcher::reload::Reloads;
 use eframe::egui;
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 fn main() -> eframe::Result {
     let override_dir = match parse_library_override() {
@@ -64,6 +68,14 @@ struct Entry {
     game: Game,
     state: Result<ExeState, String>,
     extract: Result<Status, String>,
+    stats: Stats,
+    added: Option<u64>,
+    candidates: Vec<PathBuf>,
+}
+
+enum Screen {
+    Grid,
+    Details(String),
 }
 
 enum View {
@@ -83,6 +95,8 @@ struct App {
     busy: HashSet<String>,
     reloads: Reloads,
     launcher: Launcher<UmuSpawner>,
+    screen: Screen,
+    query: Query,
 }
 
 impl App {
@@ -98,6 +112,12 @@ impl App {
             busy: HashSet::new(),
             reloads: Reloads::new(Arc::new(HttpFetch)),
             launcher: Launcher::new(UmuSpawner),
+            screen: Screen::Grid,
+            query: Query {
+                text: String::new(),
+                favorites_only: false,
+                sort: Sort::Title,
+            },
         };
         app.rescan();
         app
@@ -112,10 +132,16 @@ impl App {
                     .map(|game| {
                         let state = profile::ensure(&game.dir).map_err(|e| e.to_string());
                         let extract = extract::status(&game.dir).map_err(|e| e.to_string());
+                        let stats = profile::read_stats(&game.dir).unwrap_or_default();
+                        let added = added_secs(&game.dir);
+                        let candidates = profile::candidates(&game.dir).unwrap_or_default();
                         Entry {
                             game,
                             state,
                             extract,
+                            stats,
+                            added,
+                            candidates,
                         }
                     })
                     .collect(),
@@ -191,6 +217,20 @@ impl App {
         });
     }
 
+    fn toggle_favorite(&mut self, id: &str) {
+        let View::Games(entries) = &mut self.view else {
+            return;
+        };
+        let Some(entry) = entries.iter_mut().find(|e| e.game.id == id) else {
+            return;
+        };
+        let favorite = !entry.stats.favorite;
+        match profile::set_favorite(&entry.game.dir, favorite) {
+            Ok(()) => entry.stats.favorite = favorite,
+            Err(err) => self.message = Some(format!("Could not save favorite: {err}")),
+        }
+    }
+
     fn create_library(&mut self) {
         match std::fs::create_dir_all(&self.library) {
             Ok(()) => self.rescan(),
@@ -209,6 +249,12 @@ impl eframe::App for App {
         let mut close_chooser = false;
         let mut reload_games = Vec::new();
         let mut launch = None;
+        let mut open_details: Option<String> = None;
+        let mut favorite_id: Option<String> = None;
+        let mut back = false;
+        let mut details_reload: Option<Game> = None;
+        let mut details_extract: Option<PathBuf> = None;
+        let mut details_choice: Option<(PathBuf, PathBuf)> = None;
         self.collect_reloads();
         if !self.busy.is_empty() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
@@ -234,29 +280,89 @@ impl eframe::App for App {
                     });
                 ui.label(self.library.display().to_string());
             });
+            if matches!(self.screen, Screen::Grid) {
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_label("Sort")
+                        .selected_text(sort_label(self.query.sort))
+                        .show_ui(ui, |ui| {
+                            for sort in [Sort::LastPlayed, Sort::Title, Sort::DateAdded] {
+                                ui.selectable_value(&mut self.query.sort, sort, sort_label(sort));
+                            }
+                        });
+                    ui.label("Search");
+                    ui.text_edit_singleline(&mut self.query.text);
+                    ui.checkbox(&mut self.query.favorites_only, "Favorites only");
+                });
+            }
             if let Some(message) = &self.message {
                 ui.label(message);
             }
         });
 
-        egui::CentralPanel::default().show(ui, |ui| match &self.view {
-            View::Missing => {
+        egui::CentralPanel::default().show(ui, |ui| match (&self.screen, &self.view) {
+            (_, View::Missing) => {
                 ui.heading("Library not found");
                 ui.label(format!("{} does not exist.", self.library.display()));
                 if ui.button("Create it").clicked() {
                     create = true;
                 }
             }
-            View::Error(msg) => {
+            (_, View::Error(msg)) => {
                 ui.colored_label(egui::Color32::LIGHT_RED, msg);
             }
-            View::Games(entries) if entries.is_empty() => {
+            (Screen::Details(id), View::Games(entries))
+                if entries.iter().any(|e| &e.game.id == id) =>
+            {
+                let entry = entries.iter().find(|e| &e.game.id == id).unwrap();
+                let info = self.infos.get(id);
+                let view = DetailsView {
+                    id,
+                    info,
+                    cover: info
+                        .and_then(|info| cover_path(&entry.game, info))
+                        .filter(|path| path.exists()),
+                    stats: entry.stats,
+                    exe: match &entry.state {
+                        Ok(ExeState::Ready { exe }) => Some(exe.as_path()),
+                        _ => None,
+                    },
+                    candidates: &entry.candidates,
+                    extract: &entry.extract,
+                    error: self.errors.get(id).map(String::as_str),
+                    busy: self.busy.contains(id),
+                    running: self.launcher.is_running(&entry.game.dir),
+                };
+                let action = details_ui(ui, &view);
+                back = action.back;
+                if action.reload {
+                    details_reload = Some(entry.game.clone());
+                }
+                if action.extract {
+                    details_extract = Some(entry.game.dir.clone());
+                }
+                if action.launch {
+                    launch = entries.iter().position(|e| &e.game.id == id);
+                }
+                if action.toggle_favorite {
+                    favorite_id = Some(id.clone());
+                }
+                if let Some(exe) = action.choose_exe {
+                    details_choice = Some((entry.game.dir.clone(), exe));
+                }
+            }
+            (_, View::Games(entries)) if entries.is_empty() => {
                 ui.label("No games yet. Put RJ folders in the library and press Rescan.");
             }
-            View::Games(entries) => {
+            (_, View::Games(entries)) => {
+                let cards: Vec<Card> = entries
+                    .iter()
+                    .map(|e| card_of(e, self.infos.get(&e.game.id)))
+                    .collect();
+                let order = browse::browse(&cards, &self.query);
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
-                        for (i, entry) in entries.iter().enumerate() {
+                        for i in order {
+                            let entry = &entries[i];
                             let tile = Tile {
                                 entry,
                                 info: self.infos.get(&entry.game.id),
@@ -274,8 +380,16 @@ impl eframe::App for App {
                             if action.launch {
                                 launch = Some(i);
                             }
+                            if action.favorite {
+                                favorite_id = Some(entry.game.id.clone());
+                            }
+                            if action.details {
+                                open_details = Some(entry.game.id.clone());
+                            }
                             if action.clicked && needs_choice(entry) {
                                 open_chooser = Some(i);
+                            } else if action.clicked {
+                                open_details = Some(entry.game.id.clone());
                             }
                         }
                     });
@@ -290,10 +404,8 @@ impl eframe::App for App {
             egui::Window::new(format!("Choose exe for {}", entry.game.id))
                 .collapsible(false)
                 .show(ui.ctx(), |ui| {
-                    for candidate in candidates {
-                        if ui.button(candidate.display().to_string()).clicked() {
-                            choice = Some((entry.game.dir.clone(), candidate.clone()));
-                        }
+                    if let Some(candidate) = exe_choices(ui, candidates) {
+                        choice = Some((entry.game.dir.clone(), candidate));
                     }
                     if ui.button("Cancel").clicked() {
                         close_chooser = true;
@@ -310,21 +422,58 @@ impl eframe::App for App {
         if close_chooser {
             self.chooser = None;
         }
+        if let Some(id) = open_details {
+            self.screen = Screen::Details(id);
+        }
+        if back {
+            self.screen = Screen::Grid;
+        }
+        if let Some(id) = favorite_id {
+            self.toggle_favorite(&id);
+        }
         for game in reload_games {
             self.reload(game);
         }
-        if let Some((dir, exe)) = choice {
+        if let Some(game) = details_reload {
+            self.reload(game);
+        }
+        if let Some((dir, exe)) = details_choice.or(choice) {
             match profile::choose(&dir, &exe) {
                 Ok(()) => self.rescan(),
                 Err(err) => self.view = View::Error(err.to_string()),
             }
-        } else if let Some(dir) = extract_dir {
+        } else if let Some(dir) = extract_dir.or(details_extract) {
             self.extract_game(&dir);
         } else if create {
             self.create_library();
         } else if rescan {
             self.rescan();
         }
+    }
+}
+
+fn card_of(entry: &Entry, info: Option<&GameInfo>) -> Card {
+    Card {
+        id: entry.game.id.clone(),
+        title: info.map_or_else(|| entry.game.id.clone(), |info| info.title.clone()),
+        circle: info.and_then(|info| info.circle.clone()),
+        favorite: entry.stats.favorite,
+        last_played: entry.stats.last_played,
+        added: entry.added,
+    }
+}
+
+fn added_secs(dir: &Path) -> Option<u64> {
+    let meta = std::fs::metadata(dir).ok()?;
+    let time = meta.created().or_else(|_| meta.modified()).ok()?;
+    time.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
+}
+
+fn sort_label(sort: Sort) -> &'static str {
+    match sort {
+        Sort::LastPlayed => "Last played",
+        Sort::Title => "Title",
+        Sort::DateAdded => "Date added",
     }
 }
 
@@ -345,6 +494,8 @@ struct TileAction {
     launch: bool,
     clicked: bool,
     extract: Option<PathBuf>,
+    favorite: bool,
+    details: bool,
 }
 
 /// Draws one game tile: cover, title, exe status and a Reload button.
@@ -355,6 +506,8 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
         launch: false,
         clicked: false,
         extract: None,
+        favorite: false,
+        details: false,
     };
     ui.vertical(|ui| {
         ui.set_width(200.0);
@@ -421,9 +574,18 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
             action.launch = ui.add_enabled(ready, egui::Button::new("Launch")).clicked();
         }
         let label = if tile.busy { "Reloading..." } else { "Reload" };
-        action.reload = ui
-            .add_enabled(!tile.busy, egui::Button::new(label))
-            .clicked();
+        ui.horizontal(|ui| {
+            action.reload = ui
+                .add_enabled(!tile.busy, egui::Button::new(label))
+                .clicked();
+            let star = if tile.entry.stats.favorite {
+                "Unfavorite"
+            } else {
+                "Favorite"
+            };
+            action.favorite = ui.button(star).clicked();
+            action.details = ui.button("Details").clicked();
+        });
     });
     action
 }

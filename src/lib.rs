@@ -1,3 +1,4 @@
+pub mod browse;
 pub mod exe;
 pub mod extract;
 pub mod fetch;
