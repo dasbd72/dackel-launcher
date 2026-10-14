@@ -17,6 +17,8 @@ pub struct Settings {
     pub ui_scale: Option<f32>,
     /// Last fullscreen choice; `None` means "decide from the environment".
     pub fullscreen: Option<bool>,
+    /// Blur every cover image (they are NSFW). Off until the user turns it on.
+    pub blur_covers: bool,
 }
 
 /// Loads settings; a missing or unreadable file gives the defaults, so a bad

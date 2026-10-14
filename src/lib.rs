@@ -1,3 +1,4 @@
+pub mod blur;
 pub mod browse;
 pub mod exe;
 pub mod extract;

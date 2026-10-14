@@ -226,3 +226,18 @@ mod window_controls {
         }
     }
 }
+
+mod blur {
+    use dlsite_launcher::nav::{Command, Context, Input, command};
+
+    #[test]
+    fn the_blur_key_works_on_every_screen_including_behind_a_modal() {
+        for context in [Context::Grid, Context::Details, Context::Chooser] {
+            assert_eq!(
+                command(context, Input::ToggleBlur),
+                Some(Command::ToggleBlur),
+                "{context:?}"
+            );
+        }
+    }
+}

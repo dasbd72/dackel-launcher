@@ -44,6 +44,7 @@ pub enum Input {
     Select,
     LeftStickClick,
     RightStickClick,
+    ToggleBlur,
 }
 
 /// What the input means depends on what is on screen.
@@ -75,6 +76,7 @@ pub enum Command {
     ChooserCancel,
     ToggleFullscreen,
     CycleUiScale,
+    ToggleBlur,
 }
 
 pub fn command(context: Context, input: Input) -> Option<Command> {
@@ -84,6 +86,7 @@ pub fn command(context: Context, input: Input) -> Option<Command> {
         // Window controls work everywhere, including behind a modal.
         (_, I::RightStickClick) => Some(ToggleFullscreen),
         (_, I::LeftStickClick) => Some(CycleUiScale),
+        (_, I::ToggleBlur) => Some(ToggleBlur),
 
         (Context::Chooser, I::Up) => Some(ChooserMove(-1)),
         (Context::Chooser, I::Down) => Some(ChooserMove(1)),

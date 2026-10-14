@@ -20,6 +20,7 @@ fn saved_settings_round_trip_and_create_the_config_folder() {
     let wanted = Settings {
         ui_scale: Some(1.5),
         fullscreen: Some(true),
+        blur_covers: true,
     };
 
     save(&path, &wanted).unwrap();
@@ -87,4 +88,33 @@ fn without_either_there_is_nowhere_to_save() {
         None,
         "empty XDG is unset"
     );
+}
+
+#[test]
+fn blur_is_off_by_default_and_a_file_from_before_the_option_still_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    fs::write(&path, r#"{"ui_scale": 1.25, "fullscreen": true}"#).unwrap();
+
+    let s = load(&path);
+
+    assert!(!s.blur_covers);
+    assert_eq!(s.ui_scale, Some(1.25));
+}
+
+#[test]
+fn the_blur_choice_is_remembered() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+
+    save(
+        &path,
+        &Settings {
+            blur_covers: true,
+            ..Settings::default()
+        },
+    )
+    .unwrap();
+
+    assert!(load(&path).blur_covers);
 }

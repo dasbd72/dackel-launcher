@@ -1,5 +1,6 @@
 //! The per-game details page and the exe chooser list it shares with the grid.
 
+use crate::covers::CoverView;
 use crate::icons::{CHIP_PAD_Y, Icon, chip, icon_text_button};
 use dlsite_launcher::browse::format_play_time;
 use dlsite_launcher::extract::{Progress, Status};
@@ -27,6 +28,7 @@ pub struct DetailsView<'a> {
     pub id: &'a str,
     pub info: Option<&'a GameInfo>,
     pub cover: Option<PathBuf>,
+    pub cover_view: CoverView,
     pub stats: Stats,
     pub exe: Option<&'a Path>,
     pub candidates: &'a [PathBuf],
@@ -85,8 +87,29 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
 
     ui.horizontal_top(|ui| {
         // The cover takes the height its own aspect ratio gives it: no empty bands.
-        match view.cover.as_ref().filter(|p| p.exists()) {
-            Some(path) => {
+        match (&view.cover_view, view.cover.as_ref()) {
+            // Blur is on: only ever the blurred copy, or an empty box while it is made.
+            (CoverView::Blurred(texture), _) => {
+                let aspect = texture
+                    .as_ref()
+                    .map_or(0.75, |t| t.size_vec2().y / t.size_vec2().x);
+                let size = egui::vec2(COVER_WIDTH, COVER_WIDTH * aspect);
+                match texture {
+                    Some(texture) => {
+                        ui.add(
+                            egui::Image::new(texture)
+                                .fit_to_exact_size(size)
+                                .corner_radius(6.0),
+                        );
+                    }
+                    None => {
+                        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                        ui.painter()
+                            .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
+                    }
+                }
+            }
+            (CoverView::Normal, Some(path)) => {
                 let uri = format!("file://{}", path.display());
                 ui.add(
                     egui::Image::new(uri)
@@ -94,7 +117,7 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
                         .corner_radius(6.0),
                 );
             }
-            None => {
+            (CoverView::Normal, None) => {
                 let (rect, _) = ui.allocate_exact_size(
                     egui::vec2(COVER_WIDTH, COVER_WIDTH * 0.75),
                     egui::Sense::hover(),

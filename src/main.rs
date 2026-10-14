@@ -1,6 +1,8 @@
+mod covers;
 mod details;
 mod icons;
 
+use covers::{BlurCache, CoverView};
 use details::{DetailsView, details_ui, exe_choices};
 use dlsite_launcher::browse::{self, Card, Query, Sort};
 use dlsite_launcher::extract::{self, Encoding, Progress, Status};
@@ -226,6 +228,7 @@ struct App {
     /// Set when a game launch minimized the window, so only then do we bring it back.
     /// Extractions running in the background, by game id.
     extracting: HashMap<String, ExtractJob>,
+    blur_cache: BlurCache,
     /// Lets background work ask the window to redraw; set on the first frame.
     repaint: Option<egui::Context>,
     minimized_by_us: bool,
@@ -269,6 +272,7 @@ impl App {
             window_cmds: Vec::new(),
             zoom_request: None,
             extracting: HashMap::new(),
+            blur_cache: BlurCache::default(),
             repaint: None,
             minimized_by_us: false,
             restore: Restore::default(),
@@ -337,6 +341,8 @@ impl App {
     fn collect_reloads(&mut self) {
         while let Some(done) = self.reloads.try_next() {
             self.busy.remove(&done.id);
+            // A reload may have replaced the cover, so any blurred copy of it is stale.
+            self.blur_cache.clear();
             match done.result {
                 Ok(info) => {
                     self.errors.remove(&done.id);
@@ -528,6 +534,11 @@ impl App {
         self.save_settings();
     }
 
+    fn toggle_blur(&mut self) {
+        self.settings.blur_covers = !self.settings.blur_covers;
+        self.save_settings();
+    }
+
     fn cycle_ui_scale(&mut self) {
         self.set_ui_scale(window::next_scale(self.scale));
     }
@@ -654,6 +665,7 @@ impl App {
             Command::ChooserCancel => self.chooser = None,
             Command::ToggleFullscreen => self.toggle_fullscreen(),
             Command::CycleUiScale => self.cycle_ui_scale(),
+            Command::ToggleBlur => self.toggle_blur(),
         }
     }
 
@@ -744,6 +756,7 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.blur_cache.new_frame();
         let inputs = self.poll_inputs(&ctx);
         let visible = self.visible();
         self.normalize_focus(&visible);
@@ -783,12 +796,15 @@ impl eframe::App for App {
         let current_scale = self.scale;
         let mut picked_scale: Option<f32> = None;
         let mut fullscreen_click = false;
+        let mut blur_on = self.settings.blur_covers;
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("Rescan").clicked() {
                     rescan = true;
                 }
                 fullscreen_click = ui.button("Fullscreen").clicked();
+                ui.toggle_value(&mut blur_on, "Blur")
+                    .on_hover_text("Blur all images (key: B)");
                 egui::ComboBox::from_id_salt("ui-scale")
                     .selected_text(format!("UI x{current_scale:.2}"))
                     .show_ui(ui, |ui| {
@@ -835,6 +851,9 @@ impl eframe::App for App {
         if fullscreen_click {
             self.toggle_fullscreen();
         }
+        if blur_on != self.settings.blur_covers {
+            self.toggle_blur();
+        }
         if let Some(scale) = picked_scale {
             self.set_ui_scale(scale);
         }
@@ -868,12 +887,17 @@ impl eframe::App for App {
             {
                 let entry = entries.iter().find(|e| &e.game.id == id).unwrap();
                 let info = self.infos.get(id);
+                let cover = info
+                    .and_then(|info| cover_path(&entry.game, info))
+                    .filter(|path| path.exists());
+                let cover_view =
+                    self.blur_cache
+                        .cover_view(&ctx, self.settings.blur_covers, cover.as_deref());
                 let view = DetailsView {
                     id,
                     info,
-                    cover: info
-                        .and_then(|info| cover_path(&entry.game, info))
-                        .filter(|path| path.exists()),
+                    cover,
+                    cover_view,
                     stats: entry.stats,
                     exe: match &entry.state {
                         Ok(ExeState::Ready { exe }) => Some(exe.as_path()),
@@ -928,6 +952,16 @@ impl eframe::App for App {
                             ui.horizontal_top(|ui| {
                                 for &i in row {
                                     let entry = &entries[i];
+                                    let cover_file = self
+                                        .infos
+                                        .get(&entry.game.id)
+                                        .and_then(|info| cover_path(&entry.game, info))
+                                        .filter(|path| path.exists());
+                                    let cover_view = self.blur_cache.cover_view(
+                                        &ctx,
+                                        self.settings.blur_covers,
+                                        cover_file.as_deref(),
+                                    );
                                     let tile = Tile {
                                         entry,
                                         info: self.infos.get(&entry.game.id),
@@ -939,6 +973,8 @@ impl eframe::App for App {
                                             .get(&entry.game.id)
                                             .map(ExtractJob::progress),
                                         focused: self.focus_id.as_ref() == Some(&entry.game.id),
+                                        cover_file,
+                                        cover_view,
                                     };
                                     let action = tile_ui(ui, &tile);
                                     if tile.focused && self.scroll_to_focus {
@@ -1080,6 +1116,8 @@ struct Tile<'a> {
     running: bool,
     extracting: Option<Progress>,
     focused: bool,
+    cover_file: Option<PathBuf>,
+    cover_view: CoverView,
 }
 
 struct TileAction {
@@ -1117,16 +1155,18 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
                 action.double_clicked = response.double_clicked();
                 ui.painter()
                     .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
-                let cover = tile
-                    .info
-                    .and_then(|info| cover_path(game, info))
-                    .filter(|path| path.exists());
-                match cover {
-                    Some(path) => {
+                match (&tile.cover_view, &tile.cover_file) {
+                    // Blur is on: only ever the blurred copy, or an empty box while it is made.
+                    (CoverView::Blurred(texture), _) => {
+                        if let Some(texture) = texture {
+                            ui.put(rect, egui::Image::new(texture).fit_to_exact_size(size));
+                        }
+                    }
+                    (CoverView::Normal, Some(path)) => {
                         let uri = format!("file://{}", path.display());
                         ui.put(rect, egui::Image::new(uri).max_size(size));
                     }
-                    None => {
+                    (CoverView::Normal, None) => {
                         ui.painter().text(
                             rect.center(),
                             egui::Align2::CENTER_CENTER,
@@ -1261,6 +1301,7 @@ const KEYBOARD: &[(egui::Key, Input)] = &[
     (egui::Key::D, Input::Y),
     (egui::Key::F5, Input::Start),
     (egui::Key::F11, Input::RightStickClick),
+    (egui::Key::B, Input::ToggleBlur),
 ];
 
 fn pad_input(button: Button) -> Option<Input> {
