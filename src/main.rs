@@ -13,7 +13,10 @@ use dlsite_launcher::info::{GameInfo, cover_path, load};
 use dlsite_launcher::jobs::{ExtractJob, JobStatus};
 use dlsite_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dlsite_launcher::library::{Game, resolve_library, scan};
-use dlsite_launcher::nav::{self, Command, Context, Control, Input, Repeater};
+use dlsite_launcher::nav::{
+    self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Debounce, Input,
+    Repeater,
+};
 use dlsite_launcher::profile::{self, ExeState, Stats};
 use dlsite_launcher::proton;
 use dlsite_launcher::reload::Reloads;
@@ -83,6 +86,10 @@ fn main() -> eframe::Result {
 }
 
 const TILE_WIDTH: f32 = 200.0;
+
+const DEBOUNCE_HELP: &str = "Press debounce\n\
+Ignores a repeat of the same button within this time. Raise it if one D-pad press moves \
+twice (Steam Input can report each press from two devices); Off disables it.";
 
 const SORT_HELP: &str = "Sort\n\
 Last played: most recently played first; games never played go last.\n\
@@ -203,6 +210,7 @@ enum Picker {
     Sort,
     Encoding,
     Scale,
+    Debounce,
 }
 
 const SORTS: [Sort; 3] = [Sort::LastPlayed, Sort::Title, Sort::DateAdded];
@@ -230,6 +238,8 @@ struct App {
     query: Query,
     gilrs: Option<Gilrs>,
     stick: Repeater,
+    /// Drops a press that a second device (Steam's virtual pad) reports again.
+    debounce: Debounce,
     /// The game the controller cursor is on (by id, so it survives rescans and re-sorts).
     focus_id: Option<String>,
     /// True until the user moves the cursor: it then tracks the first game as the list re-sorts.
@@ -285,6 +295,7 @@ impl App {
                 .map_err(|err| eprintln!("gamepad support unavailable: {err}"))
                 .ok(),
             stick: Repeater::default(),
+            debounce: Debounce::new(startup.settings.debounce_ms.unwrap_or(DEFAULT_DEBOUNCE_MS)),
             focus_id: None,
             focus_auto: true,
             list_sel: 0,
@@ -563,6 +574,12 @@ impl App {
         self.save_settings();
     }
 
+    fn set_debounce(&mut self, ms: u64) {
+        self.debounce.set_window(ms);
+        self.settings.debounce_ms = Some(ms);
+        self.save_settings();
+    }
+
     fn toggle_blur(&mut self) {
         self.settings.blur_covers = !self.settings.blur_covers;
         self.save_settings();
@@ -602,6 +619,17 @@ impl App {
                     .position(|e| *e == self.encoding)
                     .unwrap_or(0),
             },
+            Picker::Debounce => PickerList {
+                title: "Press debounce",
+                labels: DEBOUNCE_PRESETS_MS
+                    .iter()
+                    .map(|ms| debounce_label(*ms))
+                    .collect(),
+                current: DEBOUNCE_PRESETS_MS
+                    .iter()
+                    .position(|ms| *ms == self.debounce.window())
+                    .unwrap_or(0),
+            },
             Picker::Scale => PickerList {
                 title: "UI scale",
                 labels: window::SCALE_PRESETS
@@ -631,6 +659,11 @@ impl App {
             Picker::Encoding => {
                 if let Some(e) = ENCODINGS.get(index) {
                     self.encoding = *e;
+                }
+            }
+            Picker::Debounce => {
+                if let Some(ms) = DEBOUNCE_PRESETS_MS.get(index) {
+                    self.set_debounce(*ms);
                 }
             }
             Picker::Scale => {
@@ -673,6 +706,7 @@ impl App {
                         Control::Sort => self.open_picker(Picker::Sort),
                         Control::Encoding => self.open_picker(Picker::Encoding),
                         Control::Scale => self.open_picker(Picker::Scale),
+                        Control::Debounce => self.open_picker(Picker::Debounce),
                         other => self.pending_press = Some(other),
                     }
                     return;
@@ -823,6 +857,8 @@ impl App {
                 }
             });
         }
+        let now_ms = self.started.elapsed().as_millis() as u64;
+        inputs.retain(|input| self.debounce.accept(now_ms, *input));
         inputs
     }
 
@@ -923,6 +959,7 @@ impl eframe::App for App {
         }
         let current_scale = self.scale;
         let mut picked_scale: Option<f32> = None;
+        let mut picked_debounce: Option<u64> = None;
         let mut fullscreen_click = false;
         let mut blur_on = self.settings.blur_covers;
         egui::Panel::top("top").show(ui, |ui| {
@@ -952,6 +989,22 @@ impl eframe::App for App {
                     })
                     .response;
                 frame.register(ui, Control::Scale, &response);
+                let response = egui::ComboBox::from_id_salt("debounce")
+                    .selected_text(format!(
+                        "Debounce {}",
+                        debounce_label(self.debounce.window())
+                    ))
+                    .show_ui(ui, |ui| {
+                        for ms in DEBOUNCE_PRESETS_MS {
+                            let on = ms == self.debounce.window();
+                            if ui.selectable_label(on, debounce_label(ms)).clicked() {
+                                picked_debounce = Some(ms);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(DEBOUNCE_HELP);
+                frame.register(ui, Control::Debounce, &response);
                 let response = egui::ComboBox::from_id_salt("zip-encoding")
                     .selected_text(encoding_label(self.encoding))
                     .show_ui(ui, |ui| {
@@ -996,6 +1049,9 @@ impl eframe::App for App {
         }
         if blur_on != self.settings.blur_covers {
             self.toggle_blur();
+        }
+        if let Some(ms) = picked_debounce {
+            self.set_debounce(ms);
         }
         if let Some(scale) = picked_scale {
             self.set_ui_scale(scale);
@@ -1483,6 +1539,13 @@ fn pad_input(button: Button) -> Option<Input> {
         Button::Select => Input::Select,
         _ => return None,
     })
+}
+
+fn debounce_label(ms: u64) -> String {
+    match ms {
+        0 => "Off".to_owned(),
+        ms => format!("{ms} ms"),
+    }
 }
 
 fn dir_input(dir: nav::Dir) -> Input {

@@ -62,6 +62,7 @@ pub enum Control {
     Fullscreen,
     Blur,
     Scale,
+    Debounce,
     Encoding,
     Sort,
     FavoritesOnly,
@@ -151,6 +152,63 @@ impl Repeater {
             return Some(dir);
         }
         None
+    }
+}
+
+/// Default for `Debounce`: presses of one button closer together than this are one press
+/// seen twice. Held-key repeat is slower than this.
+pub const DEFAULT_DEBOUNCE_MS: u64 = 25;
+/// The windows offered in the UI; 0 turns it off.
+pub const DEBOUNCE_PRESETS_MS: [u64; 5] = [0, 25, 50, 100, 150];
+
+/// Drops a press that repeats the same button within a short window.
+///
+/// Under Steam Input the physical pad and Steam's virtual copy of it both exist, and each
+/// reports every press, so one D-pad tap would otherwise move focus twice. A person cannot
+/// tap the same button twice that fast.
+#[derive(Debug)]
+pub struct Debounce {
+    window_ms: u64,
+    last: Vec<(Input, u64)>,
+}
+
+impl Default for Debounce {
+    fn default() -> Self {
+        Debounce::new(DEFAULT_DEBOUNCE_MS)
+    }
+}
+
+impl Debounce {
+    pub fn new(window_ms: u64) -> Self {
+        Debounce {
+            window_ms,
+            last: Vec::new(),
+        }
+    }
+
+    pub fn window(&self) -> u64 {
+        self.window_ms
+    }
+
+    pub fn set_window(&mut self, window_ms: u64) {
+        self.window_ms = window_ms;
+    }
+
+    /// True when the press should be acted on.
+    pub fn accept(&mut self, now_ms: u64, input: Input) -> bool {
+        match self.last.iter_mut().find(|(seen, _)| *seen == input) {
+            Some((_, at)) => {
+                let fresh = now_ms.saturating_sub(*at) >= self.window_ms;
+                if fresh {
+                    *at = now_ms;
+                }
+                fresh
+            }
+            None => {
+                self.last.push((input, now_ms));
+                true
+            }
+        }
     }
 }
 

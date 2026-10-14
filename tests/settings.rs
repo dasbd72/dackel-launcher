@@ -21,6 +21,7 @@ fn saved_settings_round_trip_and_create_the_config_folder() {
         ui_scale: Some(1.5),
         fullscreen: Some(true),
         blur_covers: true,
+        debounce_ms: Some(50),
     };
 
     save(&path, &wanted).unwrap();
@@ -117,4 +118,18 @@ fn the_blur_choice_is_remembered() {
     .unwrap();
 
     assert!(load(&path).blur_covers);
+}
+
+#[test]
+fn an_absurd_debounce_window_is_capped() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    fs::write(&path, br#"{"debounce_ms": 9999999}"#).unwrap();
+
+    assert_eq!(load(&path).debounce_ms, Some(1000));
+}
+
+#[test]
+fn debounce_is_unset_by_default() {
+    assert_eq!(Settings::default().debounce_ms, None);
 }

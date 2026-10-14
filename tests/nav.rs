@@ -275,3 +275,70 @@ mod spatial {
         );
     }
 }
+
+mod duplicates {
+    use dlsite_launcher::nav::{DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Debounce, Input};
+
+    #[test]
+    fn a_wider_window_drops_presses_that_are_further_apart() {
+        let mut d = Debounce::new(100);
+        assert!(d.accept(1000, Input::Down));
+        assert!(!d.accept(1080, Input::Down));
+        assert!(d.accept(1100, Input::Down));
+    }
+
+    #[test]
+    fn a_zero_window_turns_it_off() {
+        let mut d = Debounce::new(0);
+        assert!(d.accept(1000, Input::Down));
+        assert!(d.accept(1000, Input::Down));
+    }
+
+    #[test]
+    fn the_window_can_be_changed_while_running() {
+        let mut d = Debounce::new(0);
+        assert!(d.accept(1000, Input::Up));
+        d.set_window(50);
+        assert!(!d.accept(1010, Input::Up));
+    }
+
+    #[test]
+    fn the_default_is_one_of_the_offered_choices_and_off_is_offered() {
+        assert!(DEBOUNCE_PRESETS_MS.contains(&DEFAULT_DEBOUNCE_MS));
+        assert!(DEBOUNCE_PRESETS_MS.contains(&0));
+        assert_eq!(Debounce::default().window(), DEFAULT_DEBOUNCE_MS);
+    }
+
+    #[test]
+    fn the_same_press_arriving_twice_at_once_counts_once() {
+        // Steam shows a real pad and its virtual copy; both report the same press.
+        let mut d = Debounce::default();
+        assert!(d.accept(1000, Input::Down));
+        assert!(!d.accept(1000, Input::Down));
+        assert!(!d.accept(1010, Input::Down));
+    }
+
+    #[test]
+    fn a_real_second_press_a_moment_later_still_counts() {
+        let mut d = Debounce::default();
+        assert!(d.accept(1000, Input::Down));
+        assert!(d.accept(1080, Input::Down));
+    }
+
+    #[test]
+    fn different_buttons_at_once_are_both_kept() {
+        let mut d = Debounce::default();
+        assert!(d.accept(1000, Input::Down));
+        assert!(d.accept(1000, Input::A));
+        assert!(d.accept(1000, Input::Right));
+    }
+
+    #[test]
+    fn each_button_is_tracked_on_its_own() {
+        let mut d = Debounce::default();
+        assert!(d.accept(1000, Input::Down));
+        assert!(d.accept(1005, Input::A));
+        assert!(!d.accept(1010, Input::Down), "Down was seen 10 ms ago");
+        assert!(!d.accept(1015, Input::A), "A was seen 10 ms ago");
+    }
+}

@@ -9,6 +9,7 @@ const APP_DIR: &str = "dlsite-launcher";
 const FILE: &str = "settings.json";
 const MIN_SCALE: f32 = 0.5;
 const MAX_SCALE: f32 = 3.0;
+const MAX_DEBOUNCE_MS: u64 = 1000;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -19,6 +20,9 @@ pub struct Settings {
     pub fullscreen: Option<bool>,
     /// Blur every cover image (they are NSFW). Off until the user turns it on.
     pub blur_covers: bool,
+    /// Window (ms) inside which a repeated press of one button counts once; `None` means
+    /// the default. Steam Input can report each press twice.
+    pub debounce_ms: Option<u64>,
 }
 
 /// Loads settings; a missing or unreadable file gives the defaults, so a bad
@@ -32,6 +36,7 @@ pub fn load(path: &Path) -> Settings {
         .ui_scale
         .filter(|s| s.is_finite())
         .map(|s| s.clamp(MIN_SCALE, MAX_SCALE));
+    settings.debounce_ms = settings.debounce_ms.map(|ms| ms.min(MAX_DEBOUNCE_MS));
     settings
 }
 
