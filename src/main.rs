@@ -3,10 +3,11 @@ mod icons;
 
 use details::{DetailsView, details_ui, exe_choices};
 use dlsite_launcher::browse::{self, Card, Query, Sort};
-use dlsite_launcher::extract::{self, Encoding, Status};
+use dlsite_launcher::extract::{self, Encoding, Progress, Status};
 use dlsite_launcher::fetch::HttpFetch;
 use dlsite_launcher::fonts;
 use dlsite_launcher::info::{GameInfo, cover_path, load};
+use dlsite_launcher::jobs::{ExtractJob, JobStatus};
 use dlsite_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dlsite_launcher::library::{Game, resolve_library, scan};
 use dlsite_launcher::nav::{self, Command, Context, Input, Repeater};
@@ -223,6 +224,10 @@ struct App {
     window_cmds: Vec<egui::ViewportCommand>,
     zoom_request: Option<f32>,
     /// Set when a game launch minimized the window, so only then do we bring it back.
+    /// Extractions running in the background, by game id.
+    extracting: HashMap<String, ExtractJob>,
+    /// Lets background work ask the window to redraw; set on the first frame.
+    repaint: Option<egui::Context>,
     minimized_by_us: bool,
     restore: Restore,
     started: std::time::Instant,
@@ -263,6 +268,8 @@ impl App {
             scale: startup.scale,
             window_cmds: Vec::new(),
             zoom_request: None,
+            extracting: HashMap::new(),
+            repaint: None,
             minimized_by_us: false,
             restore: Restore::default(),
             started: std::time::Instant::now(),
@@ -273,12 +280,21 @@ impl App {
 
     fn rescan(&mut self) {
         self.chooser = None;
+        let extracting: HashSet<String> = self.extracting.keys().cloned().collect();
         self.view = match scan(&self.library) {
             Ok(games) => View::Games(
                 games
                     .into_iter()
                     .map(|game| {
-                        let state = profile::ensure(&game.dir).map_err(|e| e.to_string());
+                        // A folder being extracted is half built: do not detect (and pin) an
+                        // exe from it yet. The rescan after the job finishes does that.
+                        let state = if extracting.contains(&game.id) {
+                            Ok(ExeState::NeedsExeChoice {
+                                candidates: Vec::new(),
+                            })
+                        } else {
+                            profile::ensure(&game.dir).map_err(|e| e.to_string())
+                        };
                         let extract = extract::status(&game.dir).map_err(|e| e.to_string());
                         let stats = profile::read_stats(&game.dir).unwrap_or_default();
                         let added = added_secs(&game.dir);
@@ -333,11 +349,58 @@ impl App {
         }
     }
 
+    /// Starts extracting in the background; progress shows on the tile and details page.
     fn extract_game(&mut self, dir: &std::path::Path) {
-        self.message = Some(match extract::extract(dir, self.encoding) {
-            Ok(()) => format!("Extracted {}", dir.display()),
-            Err(err) => format!("Extract failed: {err}"),
+        let Some(id) = dir.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            return;
+        };
+        if self.extracting.contains_key(&id) {
+            return;
+        }
+        let Some(ctx) = self.repaint.clone() else {
+            return;
+        };
+        let job = ExtractJob::start(dir.to_path_buf(), self.encoding, move || {
+            ctx.request_repaint()
         });
+        self.extracting.insert(id.clone(), job);
+        self.message = Some(format!("Extracting {id}..."));
+    }
+
+    /// Asks a running extraction to stop; it removes what it created once it has.
+    fn cancel_extraction(&mut self, id: &str) {
+        if let Some(job) = self.extracting.get(id) {
+            job.cancel();
+            self.message = Some(format!("Cancelling {id}..."));
+        }
+    }
+
+    /// Collects finished extractions. Runs from `logic`, so it works while minimized.
+    fn poll_extractions(&mut self) {
+        let mut finished = Vec::new();
+        for (id, job) in &mut self.extracting {
+            match job.poll() {
+                JobStatus::Running(_) => {}
+                done => finished.push((id.clone(), done)),
+            }
+        }
+        if finished.is_empty() {
+            return;
+        }
+        for (id, status) in finished {
+            self.extracting.remove(&id);
+            self.message = Some(match status {
+                JobStatus::Finished(Ok(())) => {
+                    format!("Extracted {}", self.library.join(&id).display())
+                }
+                JobStatus::Finished(Err(err)) => format!("Extract failed ({id}): {err}"),
+                JobStatus::Cancelled => {
+                    format!("Cancelled extracting {id}; removed what it had created")
+                }
+                JobStatus::Running(_) => continue,
+            });
+        }
+        // Rescan only now: doing it mid-extraction could pin an exe from a half-built folder.
         self.rescan();
     }
 
@@ -498,7 +561,7 @@ impl App {
                 };
                 let entry = &entries[i];
                 let dir = entry.game.dir.clone();
-                if self.launcher.is_running(&dir) {
+                if self.launcher.is_running(&dir) || self.extracting.contains_key(&entry.game.id) {
                     return;
                 }
                 if matches!(entry.extract, Ok(Status::NotExtracted)) {
@@ -512,7 +575,12 @@ impl App {
             Command::Reload => {
                 if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view) {
                     let game = entries[i].game.clone();
-                    self.reload(game);
+                    // While a game is extracting, this button cancels that instead.
+                    if self.extracting.contains_key(&game.id) {
+                        self.cancel_extraction(&game.id);
+                    } else {
+                        self.reload(game);
+                    }
                 }
             }
             Command::OpenDetails => {
@@ -635,6 +703,14 @@ impl eframe::App for App {
     /// Watching for a game's exit has to happen here, or play time would only be saved
     /// once the launcher is brought back on screen.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.repaint.is_none() {
+            self.repaint = Some(ctx.clone());
+        }
+        self.poll_extractions();
+        if !self.extracting.is_empty() {
+            // Backstop in case a wake-up is missed.
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
         let was_running = self.launcher.is_running_any();
         if let Err(err) = self.launcher.poll(unix_now()) {
             self.message = Some(format!("Play time not saved: {err}"));
@@ -693,6 +769,7 @@ impl eframe::App for App {
         let mut close_chooser = false;
         let mut launch = None;
         let mut clicked_focus: Option<String> = None;
+        let mut cancel_ids: Vec<String> = Vec::new();
         let mut open_details: Option<String> = None;
         let mut favorite_id: Option<String> = None;
         let mut back = false;
@@ -764,10 +841,10 @@ impl eframe::App for App {
 
         let hint = match self.context() {
             Context::Grid => {
-                "A Launch   B Reset filters   X Reload   Y Details   LB/RB Sort   LT/RT Zip encoding   Select Favorites only   Start Rescan   R3/F11 Fullscreen   L3 UI scale"
+                "A Launch   B Reset filters   X Reload/Cancel extract   Y Details   LB/RB Sort   LT/RT Zip encoding   Select Favorites only   Start Rescan   R3/F11 Fullscreen   L3 UI scale"
             }
             Context::Details => {
-                "A Launch   B Back   X Reload   Y Favorite   LB Choose exe   RB Re-extract   Start Rescan   R3/F11 Fullscreen   L3 UI scale"
+                "A Launch   B Back   X Reload/Cancel extract   Y Favorite   LB Choose exe   RB Re-extract   Start Rescan   R3/F11 Fullscreen   L3 UI scale"
             }
             Context::Chooser => "Up/Down Select   A Pick   B Cancel   R3/F11 Fullscreen",
         };
@@ -807,6 +884,7 @@ impl eframe::App for App {
                     error: self.errors.get(id).map(String::as_str),
                     busy: self.busy.contains(id),
                     running: self.launcher.is_running(&entry.game.dir),
+                    extracting: self.extracting.get(id).map(ExtractJob::progress),
                 };
                 let action = details_ui(ui, &view);
                 back = action.back;
@@ -815,6 +893,9 @@ impl eframe::App for App {
                 }
                 if action.extract {
                     details_extract = Some(entry.game.dir.clone());
+                }
+                if action.cancel_extract {
+                    cancel_ids.push(id.clone());
                 }
                 if action.launch {
                     launch = entries.iter().position(|e| &e.game.id == id);
@@ -853,6 +934,10 @@ impl eframe::App for App {
                                         error: self.errors.get(&entry.game.id).map(String::as_str),
                                         busy: self.busy.contains(&entry.game.id),
                                         running: self.launcher.is_running(&entry.game.dir),
+                                        extracting: self
+                                            .extracting
+                                            .get(&entry.game.id)
+                                            .map(ExtractJob::progress),
                                         focused: self.focus_id.as_ref() == Some(&entry.game.id),
                                     };
                                     let action = tile_ui(ui, &tile);
@@ -872,6 +957,9 @@ impl eframe::App for App {
                                     }
                                     if action.launch {
                                         launch = Some(i);
+                                    }
+                                    if action.cancel_extract {
+                                        cancel_ids.push(entry.game.id.clone());
                                     }
                                     if action.favorite {
                                         favorite_id = Some(entry.game.id.clone());
@@ -915,6 +1003,9 @@ impl eframe::App for App {
         if let Some(id) = clicked_focus {
             self.focus_id = Some(id);
             self.focus_auto = false;
+        }
+        for id in cancel_ids {
+            self.cancel_extraction(&id);
         }
         if let Some(i) = launch {
             self.launch_game(i);
@@ -987,6 +1078,7 @@ struct Tile<'a> {
     error: Option<&'a str>,
     busy: bool,
     running: bool,
+    extracting: Option<Progress>,
     focused: bool,
 }
 
@@ -997,6 +1089,7 @@ struct TileAction {
     extract: Option<PathBuf>,
     favorite: bool,
     details: bool,
+    cancel_extract: bool,
     rect: egui::Rect,
 }
 
@@ -1010,6 +1103,7 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
         extract: None,
         favorite: false,
         details: false,
+        cancel_extract: false,
         rect: egui::Rect::NOTHING,
     };
     let cell = egui::Frame::new()
@@ -1050,7 +1144,9 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
                     ui.set_min_height(2.0 * ui.text_style_height(&egui::TextStyle::Body));
                     ui.add(egui::Label::new(two_line_title(ui, title)));
                 });
-                if tile.running {
+                if tile.extracting.is_some() {
+                    ui.weak("extracting...");
+                } else if tile.running {
                     ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
                 } else if tile.busy {
                     ui.weak("Reloading...");
@@ -1077,6 +1173,19 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
                     ui.colored_label(egui::Color32::LIGHT_RED, err);
                 }
                 ui.horizontal(|ui| {
+                    if let Some(progress) = tile.extracting {
+                        let bar_width =
+                            TILE_WIDTH - icons::ICON_BUTTON.x - ui.spacing().item_spacing.x;
+                        ui.add(
+                            egui::ProgressBar::new(progress.fraction())
+                                .desired_width(bar_width)
+                                .desired_height(icons::BUTTON_HEIGHT)
+                                .text(format!("Extracting {:.0}%", progress.fraction() * 100.0)),
+                        );
+                        action.cancel_extract =
+                            icon_button(ui, Icon::Close, "Cancel extraction", true).clicked();
+                        return;
+                    }
                     let not_extracted = matches!(tile.entry.extract, Ok(Status::NotExtracted));
                     let ready = matches!(tile.entry.state, Ok(ExeState::Ready { .. }));
                     if tile.running {

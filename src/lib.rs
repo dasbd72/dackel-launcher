@@ -4,6 +4,7 @@ pub mod extract;
 pub mod fetch;
 pub mod fonts;
 pub mod info;
+pub mod jobs;
 pub mod launch;
 pub mod library;
 pub mod nav;

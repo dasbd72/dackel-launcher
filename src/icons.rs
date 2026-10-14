@@ -19,12 +19,14 @@ const PLAY: &[u8] = include_bytes!("../assets/icons/play-fill.svg");
 const HEART_FILL: &[u8] = include_bytes!("../assets/icons/heart-fill.svg");
 const HEART: &[u8] = include_bytes!("../assets/icons/heart.svg");
 const INFO: &[u8] = include_bytes!("../assets/icons/info.svg");
+const CLOSE: &[u8] = include_bytes!("../assets/icons/x.svg");
 
 #[derive(Clone, Copy)]
 pub enum Icon {
     Play,
     Heart { filled: bool },
     Info,
+    Close,
 }
 
 impl Icon {
@@ -34,6 +36,7 @@ impl Icon {
             Icon::Heart { filled: true } => ("bytes://icons/heart-fill.svg", HEART_FILL),
             Icon::Heart { filled: false } => ("bytes://icons/heart.svg", HEART),
             Icon::Info => ("bytes://icons/info.svg", INFO),
+            Icon::Close => ("bytes://icons/x.svg", CLOSE),
         };
         Image::from_bytes(uri, bytes)
     }
@@ -44,7 +47,7 @@ impl Icon {
             _ if !enabled => weak,
             Icon::Play => PLAY_GREEN,
             Icon::Heart { filled: true } => HEART_RED,
-            Icon::Heart { filled: false } | Icon::Info => ink,
+            Icon::Heart { filled: false } | Icon::Info | Icon::Close => ink,
         }
     }
 }

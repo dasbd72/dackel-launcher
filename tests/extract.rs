@@ -1,7 +1,11 @@
-use dlsite_launcher::extract::{Encoding, ExtractError, Status, Unsupported, extract, status};
+use dlsite_launcher::extract::{
+    Encoding, ExtractError, Progress, Status, Unsupported, extract, extract_cancellable,
+    extract_with_progress, status,
+};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
     let file = fs::File::create(path).unwrap();
@@ -255,4 +259,206 @@ fn plain_folder_without_archives_is_ready_with_no_zip() {
     fs::write(game.join("start.exe"), b"exe").unwrap();
 
     assert_eq!(status(&game).unwrap(), Status::Ready { has_zip: false });
+}
+
+fn progress_of(dir: &Path) -> Vec<Progress> {
+    let mut seen = Vec::new();
+    extract_with_progress(dir, Encoding::Auto, |p| seen.push(p)).unwrap();
+    seen
+}
+
+fn game_with_three_files() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let big = vec![7u8; 200_000];
+    write_zip(
+        &dir.path().join("RJ1.zip"),
+        &[
+            ("Game/a.bin", &[1u8; 100]),
+            ("Game/b.bin", &big),
+            ("Game/c.txt", b"hello"),
+        ],
+    );
+    dir
+}
+
+#[test]
+fn progress_knows_the_totals_from_the_first_report() {
+    let dir = game_with_three_files();
+
+    let seen = progress_of(dir.path());
+
+    assert!(!seen.is_empty());
+    assert!(
+        seen.iter()
+            .all(|p| p.bytes_total == 200_105 && p.files_total == 3)
+    );
+    assert_eq!(
+        (seen[0].bytes_done, seen[0].files_done),
+        (0, 0),
+        "starts at zero"
+    );
+}
+
+#[test]
+fn progress_never_goes_backwards_and_ends_exactly_at_the_totals() {
+    let dir = game_with_three_files();
+
+    let seen = progress_of(dir.path());
+
+    for pair in seen.windows(2) {
+        assert!(pair[0].bytes_done <= pair[1].bytes_done);
+        assert!(pair[0].files_done <= pair[1].files_done);
+    }
+    let last = seen.last().unwrap();
+    assert_eq!((last.bytes_done, last.files_done), (200_105, 3));
+}
+
+#[test]
+fn a_large_file_reports_partial_progress_while_it_is_being_written() {
+    let dir = game_with_three_files();
+
+    let seen = progress_of(dir.path());
+
+    assert!(
+        seen.iter()
+            .any(|p| p.bytes_done > 0 && p.bytes_done < p.bytes_total),
+        "expected mid-file reports, got {seen:?}"
+    );
+}
+
+#[test]
+fn an_unsupported_archive_reports_no_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("RJ1.zip.001"), b"x").unwrap();
+    fs::write(dir.path().join("RJ1.zip.002"), b"x").unwrap();
+    let mut calls = 0;
+
+    let result = extract_with_progress(dir.path(), Encoding::Auto, |_| calls += 1);
+
+    assert!(matches!(result, Err(ExtractError::Unsupported(_))));
+    assert_eq!(calls, 0);
+}
+
+#[test]
+fn progress_fraction_is_by_bytes_then_files_and_never_exceeds_one() {
+    let half = Progress {
+        bytes_done: 50,
+        bytes_total: 200,
+        files_done: 0,
+        files_total: 4,
+    };
+    assert_eq!(half.fraction(), 0.25);
+
+    let only_empty_files = Progress {
+        bytes_done: 0,
+        bytes_total: 0,
+        files_done: 1,
+        files_total: 4,
+    };
+    assert_eq!(only_empty_files.fraction(), 0.25);
+
+    let nothing = Progress {
+        bytes_done: 0,
+        bytes_total: 0,
+        files_done: 0,
+        files_total: 0,
+    };
+    assert_eq!(nothing.fraction(), 1.0);
+
+    let over = Progress {
+        bytes_done: 300,
+        bytes_total: 200,
+        files_done: 4,
+        files_total: 4,
+    };
+    assert_eq!(over.fraction(), 1.0);
+}
+
+fn cancel_when(dir: &Path, flag: &AtomicBool, after_bytes: u64) -> Result<(), ExtractError> {
+    extract_cancellable(dir, Encoding::Auto, flag, |p| {
+        if p.bytes_done >= after_bytes {
+            flag.store(true, Ordering::SeqCst);
+        }
+    })
+}
+
+#[test]
+fn cancelling_before_anything_is_written_changes_nothing() {
+    let dir = game_with_three_files();
+    let flag = AtomicBool::new(true);
+
+    let result = extract_cancellable(dir.path(), Encoding::Auto, &flag, |_| {});
+
+    assert!(matches!(result, Err(ExtractError::Cancelled)));
+    assert_eq!(names_in(dir.path()), ["RJ1.zip"]);
+}
+
+#[test]
+fn cancelling_midway_removes_everything_the_run_created() {
+    let dir = game_with_three_files();
+    let flag = AtomicBool::new(false);
+
+    let result = cancel_when(dir.path(), &flag, 100_000);
+
+    assert!(matches!(result, Err(ExtractError::Cancelled)));
+    assert_eq!(
+        names_in(dir.path()),
+        ["RJ1.zip"],
+        "no extracted folder, no .part leftovers"
+    );
+}
+
+#[test]
+fn cancelling_leaves_files_and_folders_that_were_already_there() {
+    let dir = game_with_three_files();
+    fs::create_dir(dir.path().join("Game")).unwrap();
+    fs::write(dir.path().join("Game/keep.txt"), b"mine").unwrap();
+    fs::write(dir.path().join("notes.txt"), b"notes").unwrap();
+    let flag = AtomicBool::new(false);
+
+    cancel_when(dir.path(), &flag, 100_000).unwrap_err();
+
+    assert_eq!(fs::read(dir.path().join("Game/keep.txt")).unwrap(), b"mine");
+    assert_eq!(fs::read(dir.path().join("notes.txt")).unwrap(), b"notes");
+    assert!(
+        !dir.path().join("Game/b.bin").exists(),
+        "the new big file is gone"
+    );
+    assert!(!dir.path().join("Game/c.txt").exists());
+}
+
+#[test]
+fn a_cancelled_re_extract_never_leaves_a_half_written_file() {
+    let dir = game_with_three_files();
+    fs::create_dir(dir.path().join("Game")).unwrap();
+    fs::write(dir.path().join("Game/b.bin"), b"old contents").unwrap();
+    let flag = AtomicBool::new(false);
+
+    cancel_when(dir.path(), &flag, 100_000).unwrap_err();
+
+    // The big file was being overwritten when the cancel came in: it must still be the
+    // complete old file, not a truncated mix, and no temporary file is left behind.
+    assert_eq!(
+        fs::read(dir.path().join("Game/b.bin")).unwrap(),
+        b"old contents"
+    );
+    assert!(
+        names_in(&dir.path().join("Game"))
+            .iter()
+            .all(|n| !n.ends_with(".part")),
+        "no .part files"
+    );
+}
+
+#[test]
+fn an_uncancelled_extraction_leaves_no_temporary_files() {
+    let dir = game_with_three_files();
+
+    extract(dir.path(), Encoding::Auto).unwrap();
+
+    assert_eq!(names_in(dir.path()), ["Game", "RJ1.zip"]);
+    assert_eq!(
+        names_in(&dir.path().join("Game")),
+        ["a.bin", "b.bin", "c.txt"]
+    );
 }

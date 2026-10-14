@@ -2,7 +2,7 @@
 
 use crate::icons::{CHIP_PAD_Y, Icon, chip, icon_text_button};
 use dlsite_launcher::browse::format_play_time;
-use dlsite_launcher::extract::Status;
+use dlsite_launcher::extract::{Progress, Status};
 use dlsite_launcher::info::GameInfo;
 use dlsite_launcher::profile::Stats;
 use eframe::egui;
@@ -34,6 +34,8 @@ pub struct DetailsView<'a> {
     pub error: Option<&'a str>,
     pub busy: bool,
     pub running: bool,
+    /// Set while this game is being extracted in the background.
+    pub extracting: Option<Progress>,
 }
 
 #[derive(Default)]
@@ -41,6 +43,7 @@ pub struct DetailsAction {
     pub back: bool,
     pub reload: bool,
     pub extract: bool,
+    pub cancel_extract: bool,
     pub toggle_favorite: bool,
     pub launch: bool,
     pub choose_exe: Option<PathBuf>,
@@ -163,40 +166,58 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
 
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if view.running {
-                    ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
-                } else if icon_text_button(ui, Icon::Play, "Launch", view.exe.is_some()).clicked() {
-                    action.launch = true;
-                }
-                let label = if view.busy {
-                    "Reloading..."
+                if let Some(progress) = view.extracting {
+                    let pct = progress.fraction() * 100.0;
+                    ui.add(
+                        egui::ProgressBar::new(progress.fraction())
+                            .desired_width(340.0)
+                            .desired_height(crate::icons::BUTTON_HEIGHT)
+                            .text(format!(
+                                "Extracting {pct:.0}%  ({} / {} files)",
+                                progress.files_done, progress.files_total
+                            )),
+                    );
+                    if icon_text_button(ui, Icon::Close, "Cancel", true).clicked() {
+                        action.cancel_extract = true;
+                    }
                 } else {
-                    "Reload info"
-                };
-                if ui
-                    .add_enabled(!view.busy, egui::Button::new(label))
-                    .clicked()
-                {
-                    action.reload = true;
-                }
-                match view.extract {
-                    Err(msg) => {
-                        ui.colored_label(egui::Color32::LIGHT_RED, msg);
+                    if view.running {
+                        ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
+                    } else if icon_text_button(ui, Icon::Play, "Launch", view.exe.is_some())
+                        .clicked()
+                    {
+                        action.launch = true;
                     }
-                    Ok(Status::NotExtracted) => {
-                        if ui.button("Extract").clicked() {
-                            action.extract = true;
+                    let label = if view.busy {
+                        "Reloading..."
+                    } else {
+                        "Reload info"
+                    };
+                    if ui
+                        .add_enabled(!view.busy, egui::Button::new(label))
+                        .clicked()
+                    {
+                        action.reload = true;
+                    }
+                    match view.extract {
+                        Err(msg) => {
+                            ui.colored_label(egui::Color32::LIGHT_RED, msg);
                         }
-                    }
-                    Ok(Status::ExtractManually(_)) => {
-                        ui.colored_label(egui::Color32::YELLOW, "extract manually");
-                    }
-                    Ok(Status::Ready { has_zip: true }) => {
-                        if ui.button("Re-extract").clicked() {
-                            action.extract = true;
+                        Ok(Status::NotExtracted) => {
+                            if ui.button("Extract").clicked() {
+                                action.extract = true;
+                            }
                         }
+                        Ok(Status::ExtractManually(_)) => {
+                            ui.colored_label(egui::Color32::YELLOW, "extract manually");
+                        }
+                        Ok(Status::Ready { has_zip: true }) => {
+                            if ui.button("Re-extract").clicked() {
+                                action.extract = true;
+                            }
+                        }
+                        Ok(Status::Ready { has_zip: false }) => {}
                     }
-                    Ok(Status::Ready { has_zip: false }) => {}
                 }
                 let favorite = view.stats.favorite;
                 let label = if favorite { "Unfavorite" } else { "Favorite" };

@@ -1,10 +1,13 @@
 use std::borrow::Cow;
 use std::fs::{self, File};
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const META_DIR: &str = ".dlsite-launcher";
 const UTF8_FLAG: u16 = 0x0800;
+/// How much is copied between progress reports.
+const COPY_CHUNK: usize = 64 * 1024;
 const EOCD_SIGNATURE: &[u8] = b"PK\x05\x06";
 /// The end-of-central-directory record is at most 22 bytes plus a 65535-byte comment.
 const EOCD_SEARCH_WINDOW: u64 = 22 + 65_535;
@@ -41,6 +44,7 @@ pub enum ExtractError {
     Zip(zip::result::ZipError),
     Unsupported(Unsupported),
     NoArchive,
+    Cancelled,
     UnsafeEntry(String),
     UnreadableName(String),
 }
@@ -52,6 +56,7 @@ impl std::fmt::Display for ExtractError {
             ExtractError::Zip(err) => write!(f, "{err}"),
             ExtractError::Unsupported(kind) => write!(f, "extract manually: {kind:?}"),
             ExtractError::NoArchive => write!(f, "no zip archive to extract"),
+            ExtractError::Cancelled => write!(f, "cancelled"),
             ExtractError::UnsafeEntry(name) => write!(f, "unsafe path in archive: {name}"),
             ExtractError::UnreadableName(name) => write!(f, "cannot decode archive name: {name}"),
         }
@@ -151,7 +156,52 @@ pub fn status(game_dir: &Path) -> io::Result<Status> {
 
 /// Extracts every zip directly in `game_dir`. Each archive is validated in full
 /// before anything is written, so a bad entry leaves the folder untouched.
+/// How far an extraction has got. Totals are known before the first byte is written.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Progress {
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub files_done: u64,
+    pub files_total: u64,
+}
+
+impl Progress {
+    /// 0.0 to 1.0, by uncompressed bytes (by file count when there are no bytes).
+    pub fn fraction(&self) -> f32 {
+        let (done, total) = if self.bytes_total > 0 {
+            (self.bytes_done, self.bytes_total)
+        } else {
+            (self.files_done, self.files_total)
+        };
+        if total == 0 {
+            1.0
+        } else {
+            (done as f32 / total as f32).min(1.0)
+        }
+    }
+}
+
 pub fn extract(game_dir: &Path, encoding: Encoding) -> Result<(), ExtractError> {
+    extract_with_progress(game_dir, encoding, |_| {})
+}
+
+/// Like [`extract`], reporting progress as it goes. `progress` is called once before
+/// anything is written, then as data is copied, so it should be cheap.
+pub fn extract_with_progress(
+    game_dir: &Path,
+    encoding: Encoding,
+    progress: impl FnMut(Progress),
+) -> Result<(), ExtractError> {
+    extract_cancellable(game_dir, encoding, &AtomicBool::new(false), progress)
+}
+
+/// Like [`extract_with_progress`], stopping early when `cancel` becomes true.
+pub fn extract_cancellable(
+    game_dir: &Path,
+    encoding: Encoding,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(Progress),
+) -> Result<(), ExtractError> {
     let listed = list(game_dir)?;
     if let Some(kind) = unsupported(game_dir, &listed)? {
         return Err(ExtractError::Unsupported(kind));
@@ -183,19 +233,122 @@ pub fn extract(game_dir: &Path, encoding: Encoding) -> Result<(), ExtractError> 
         jobs.push((archive, plan.entries, root));
     }
 
+    let done = Progress {
+        bytes_total: jobs.iter().flat_map(|(_, e, _)| e).map(|e| e.size).sum(),
+        files_total: jobs
+            .iter()
+            .flat_map(|(_, e, _)| e)
+            .filter(|e| !e.is_dir)
+            .count() as u64,
+        ..Progress::default()
+    };
+    progress(done);
+
+    let mut created = Created::default();
+    let result = write_entries(jobs, cancel, &mut progress, done, &mut created);
+    if let Some(part) = created.part.take() {
+        let _ = fs::remove_file(part);
+    }
+    if matches!(result, Err(ExtractError::Cancelled)) {
+        created.roll_back();
+    }
+    result
+}
+
+/// Everything one run created, so a cancel can undo exactly that and nothing else.
+#[derive(Default)]
+struct Created {
+    files: Vec<PathBuf>,
+    dirs: Vec<PathBuf>,
+    /// The temporary file being written right now.
+    part: Option<PathBuf>,
+}
+
+impl Created {
+    fn roll_back(&mut self) {
+        for file in self.files.drain(..) {
+            let _ = fs::remove_file(file);
+        }
+        // Deepest first; `remove_dir` only removes an empty folder, so anything that was
+        // already there (or that the user added meanwhile) is never touched.
+        self.dirs
+            .sort_by_key(|dir| std::cmp::Reverse(dir.components().count()));
+        for dir in self.dirs.drain(..) {
+            let _ = fs::remove_dir(dir);
+        }
+    }
+}
+
+/// `create_dir_all` that remembers which folders it actually had to create.
+fn create_dirs_tracked(path: &Path, created: &mut Created) -> io::Result<()> {
+    let mut missing = Vec::new();
+    let mut current = path;
+    while !current.exists() {
+        missing.push(current.to_path_buf());
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    fs::create_dir_all(path)?;
+    created.dirs.extend(missing);
+    Ok(())
+}
+
+fn part_path(out: &Path) -> PathBuf {
+    let mut name = out.as_os_str().to_owned();
+    name.push(".part");
+    PathBuf::from(name)
+}
+
+fn write_entries(
+    jobs: Vec<(zip::ZipArchive<File>, Vec<PlannedEntry>, PathBuf)>,
+    cancel: &AtomicBool,
+    progress: &mut impl FnMut(Progress),
+    mut done: Progress,
+    created: &mut Created,
+) -> Result<(), ExtractError> {
+    let mut buffer = vec![0u8; COPY_CHUNK];
     for (mut archive, entries, root) in jobs {
         for entry in entries {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(ExtractError::Cancelled);
+            }
             let out = root.join(&entry.rel);
             if entry.is_dir {
-                fs::create_dir_all(&out)?;
+                create_dirs_tracked(&out, created)?;
                 continue;
             }
             if let Some(parent) = out.parent() {
-                fs::create_dir_all(parent)?;
+                create_dirs_tracked(parent, created)?;
             }
+            let existed = out.exists();
+            // Written under a temporary name and renamed when complete, so a cancel or a
+            // crash never leaves a half-written file under the real name.
+            let part = part_path(&out);
             let mut src = archive.by_index(entry.index)?;
-            let mut dst = File::create(&out)?;
-            io::copy(&mut src, &mut dst)?;
+            let mut dst = File::create(&part)?;
+            created.part = Some(part.clone());
+            loop {
+                if cancel.load(Ordering::SeqCst) {
+                    return Err(ExtractError::Cancelled);
+                }
+                let n = src.read(&mut buffer)?;
+                if n == 0 {
+                    break;
+                }
+                dst.write_all(&buffer[..n])?;
+                done.bytes_done += n as u64;
+                progress(done);
+            }
+            drop(dst);
+            fs::rename(&part, &out)?;
+            created.part = None;
+            if !existed {
+                created.files.push(out);
+            }
+            done.files_done += 1;
+            progress(done);
         }
     }
     Ok(())
@@ -205,6 +358,8 @@ struct PlannedEntry {
     index: usize,
     rel: PathBuf,
     is_dir: bool,
+    /// Uncompressed size in bytes; 0 for directories.
+    size: u64,
 }
 
 struct Plan {
@@ -219,10 +374,16 @@ fn plan(archive: &mut zip::ZipArchive<File>, encoding: Encoding) -> Result<Plan,
         let raw = archive.by_index_raw(index)?;
         let utf8_flag = raw.flags().as_u16() & UTF8_FLAG != 0;
         let is_dir = raw.is_dir();
+        let size = if is_dir { 0 } else { raw.size() };
         let name = decode_name(raw.name_raw(), encoding, utf8_flag)?;
         drop(raw);
         if let Some(rel) = safe_relative(&name)? {
-            entries.push(PlannedEntry { index, rel, is_dir });
+            entries.push(PlannedEntry {
+                index,
+                rel,
+                is_dir,
+                size,
+            });
         }
     }
 
