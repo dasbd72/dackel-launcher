@@ -665,7 +665,6 @@ impl eframe::App for App {
         let mut rescan = false;
         let mut extract_dir: Option<PathBuf> = None;
         let mut create = false;
-        let mut open_chooser = None;
         let mut choice = None;
         let mut close_chooser = false;
         let mut launch = None;
@@ -851,10 +850,9 @@ impl eframe::App for App {
                                     if action.details {
                                         open_details = Some(entry.game.id.clone());
                                     }
-                                    // One click only moves the focus (done above); two open the game.
-                                    if action.double_clicked && needs_choice(entry) {
-                                        open_chooser = Some(i);
-                                    } else if action.double_clicked {
+                                    // One click only moves the focus (done above); two open the
+                                    // details page, which works for any game, extracted or not.
+                                    if action.double_clicked {
                                         open_details = Some(entry.game.id.clone());
                                     }
                                 }
@@ -891,9 +889,6 @@ impl eframe::App for App {
         }
         if let Some(i) = launch {
             self.launch_game(i);
-        }
-        if let Some(i) = open_chooser {
-            self.chooser = Some(i);
         }
         if close_chooser {
             self.chooser = None;
