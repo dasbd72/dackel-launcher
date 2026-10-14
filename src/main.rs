@@ -1,8 +1,14 @@
+use dlsite_launcher::fetch::HttpFetch;
+use dlsite_launcher::info::{GameInfo, cover_path, load};
 use dlsite_launcher::library::{Game, resolve_library, scan};
 use dlsite_launcher::profile::{self, ExeState};
+use dlsite_launcher::reload::Reloads;
 use eframe::egui;
+use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 fn main() -> eframe::Result {
     let override_dir = match parse_library_override() {
@@ -28,7 +34,10 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "DLsite Launcher",
         options,
-        Box::new(move |_cc| Ok(Box::new(App::new(library)))),
+        Box::new(move |cc| {
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+            Ok(Box::new(App::new(library)))
+        }),
     )
 }
 
@@ -63,6 +72,10 @@ struct App {
     library: PathBuf,
     view: View,
     chooser: Option<usize>,
+    infos: HashMap<String, GameInfo>,
+    errors: HashMap<String, String>,
+    busy: HashSet<String>,
+    reloads: Reloads,
 }
 
 impl App {
@@ -71,6 +84,10 @@ impl App {
             library,
             view: View::Missing,
             chooser: None,
+            infos: HashMap::new(),
+            errors: HashMap::new(),
+            busy: HashSet::new(),
+            reloads: Reloads::new(Arc::new(HttpFetch)),
         };
         app.rescan();
         app
@@ -91,6 +108,40 @@ impl App {
             Err(err) if err.kind() == ErrorKind::NotFound => View::Missing,
             Err(err) => View::Error(err.to_string()),
         };
+        let games: Vec<Game> = match &self.view {
+            View::Games(entries) => entries.iter().map(|e| e.game.clone()).collect(),
+            _ => return,
+        };
+        for game in games {
+            match load(&game) {
+                Some(info) => {
+                    self.infos.insert(game.id.clone(), info);
+                }
+                None => self.reload(game),
+            }
+        }
+    }
+
+    fn reload(&mut self, game: Game) {
+        if self.busy.insert(game.id.clone()) {
+            self.errors.remove(&game.id);
+            self.reloads.start(game);
+        }
+    }
+
+    fn collect_reloads(&mut self) {
+        while let Some(done) = self.reloads.try_next() {
+            self.busy.remove(&done.id);
+            match done.result {
+                Ok(info) => {
+                    self.errors.remove(&done.id);
+                    self.infos.insert(done.id, info);
+                }
+                Err(msg) => {
+                    self.errors.insert(done.id, msg);
+                }
+            }
+        }
     }
 
     fn create_library(&mut self) {
@@ -108,6 +159,11 @@ impl eframe::App for App {
         let mut open_chooser = None;
         let mut choice = None;
         let mut close_chooser = false;
+        let mut reload_games = Vec::new();
+        self.collect_reloads();
+        if !self.busy.is_empty() {
+            ui.ctx().request_repaint_after(Duration::from_millis(100));
+        }
 
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -136,8 +192,17 @@ impl eframe::App for App {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for (i, entry) in entries.iter().enumerate() {
-                            let response = tile(ui, entry);
-                            if response.clicked() && needs_choice(entry) {
+                            let tile = Tile {
+                                entry,
+                                info: self.infos.get(&entry.game.id),
+                                error: self.errors.get(&entry.game.id).map(String::as_str),
+                                busy: self.busy.contains(&entry.game.id),
+                            };
+                            let action = tile_ui(ui, &tile);
+                            if action.reload {
+                                reload_games.push(entry.game.clone());
+                            }
+                            if action.clicked && needs_choice(entry) {
                                 open_chooser = Some(i);
                             }
                         }
@@ -170,6 +235,9 @@ impl eframe::App for App {
         if close_chooser {
             self.chooser = None;
         }
+        for game in reload_games {
+            self.reload(game);
+        }
         if let Some((dir, exe)) = choice {
             match profile::choose(&dir, &exe) {
                 Ok(()) => self.rescan(),
@@ -187,28 +255,68 @@ fn needs_choice(entry: &Entry) -> bool {
     matches!(entry.state, Ok(ExeState::NeedsExeChoice { .. }))
 }
 
-fn tile(ui: &mut egui::Ui, entry: &Entry) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(200.0, 150.0), egui::Sense::click());
-    ui.painter()
-        .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
-    ui.painter().text(
-        rect.center_top() + egui::vec2(0.0, 30.0),
-        egui::Align2::CENTER_CENTER,
-        &entry.game.id,
-        egui::FontId::proportional(20.0),
-        ui.visuals().text_color(),
-    );
-    let status = match &entry.state {
-        Ok(ExeState::Ready { exe }) => exe.display().to_string(),
-        Ok(ExeState::NeedsExeChoice { .. }) => "needs exe choice".to_owned(),
-        Err(msg) => msg.clone(),
+struct Tile<'a> {
+    entry: &'a Entry,
+    info: Option<&'a GameInfo>,
+    error: Option<&'a str>,
+    busy: bool,
+}
+
+struct TileAction {
+    reload: bool,
+    clicked: bool,
+}
+
+/// Draws one game tile: cover, title, exe status and a Reload button.
+fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
+    let game = &tile.entry.game;
+    let mut action = TileAction {
+        reload: false,
+        clicked: false,
     };
-    ui.painter().text(
-        rect.center_bottom() - egui::vec2(0.0, 24.0),
-        egui::Align2::CENTER_CENTER,
-        status,
-        egui::FontId::proportional(13.0),
-        ui.visuals().weak_text_color(),
-    );
-    response
+    ui.vertical(|ui| {
+        ui.set_width(200.0);
+        let size = egui::vec2(200.0, 150.0);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        action.clicked = response.clicked();
+        ui.painter()
+            .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
+        let cover = tile
+            .info
+            .and_then(|info| cover_path(game, info))
+            .filter(|path| path.exists());
+        match cover {
+            Some(path) => {
+                let uri = format!("file://{}", path.display());
+                ui.put(rect, egui::Image::new(uri).max_size(size));
+            }
+            None => {
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "No cover",
+                    egui::FontId::proportional(16.0),
+                    ui.visuals().weak_text_color(),
+                );
+            }
+        }
+        let title = tile
+            .info
+            .map_or(game.id.as_str(), |info| info.title.as_str());
+        ui.add(egui::Label::new(egui::RichText::new(title).strong()).wrap());
+        let status = match &tile.entry.state {
+            Ok(ExeState::Ready { exe }) => exe.display().to_string(),
+            Ok(ExeState::NeedsExeChoice { .. }) => "needs exe choice".to_owned(),
+            Err(msg) => msg.clone(),
+        };
+        ui.weak(status);
+        if let Some(err) = tile.error {
+            ui.colored_label(egui::Color32::LIGHT_RED, err);
+        }
+        let label = if tile.busy { "Reloading..." } else { "Reload" };
+        action.reload = ui
+            .add_enabled(!tile.busy, egui::Button::new(label))
+            .clicked();
+    });
+    action
 }
