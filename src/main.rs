@@ -1,4 +1,5 @@
 mod details;
+mod icons;
 
 use details::{DetailsView, details_ui, exe_choices};
 use dlsite_launcher::browse::{self, Card, Query, Sort};
@@ -16,6 +17,7 @@ use dlsite_launcher::settings::{self, Settings};
 use dlsite_launcher::window::{self, Restore, RestoreStep};
 use eframe::egui;
 use gilrs::{Axis, Button, EventType, Gilrs};
+use icons::{Icon, icon_button};
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -51,6 +53,11 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
+            // Slightly larger buttons everywhere, which also suits a controller on the Deck.
+            cc.egui_ctx.global_style_mut(|style| {
+                style.spacing.button_padding = egui::vec2(12.0, 7.0);
+                style.spacing.interact_size.y = icons::BUTTON_HEIGHT;
+            });
             install_japanese_font(&cc.egui_ctx);
             cc.egui_ctx.set_zoom_factor(startup.scale);
             Ok(Box::new(App::new(library, startup)))
@@ -673,9 +680,8 @@ impl eframe::App for App {
         if !self.busy.is_empty() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
-        let mut scale_edit = self.scale;
-        let mut scale_dragging = false;
-        let mut scale_done = false;
+        let current_scale = self.scale;
+        let mut picked_scale: Option<f32> = None;
         let mut fullscreen_click = false;
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -683,15 +689,16 @@ impl eframe::App for App {
                     rescan = true;
                 }
                 fullscreen_click = ui.button("Fullscreen").clicked();
-                let scale = ui.add(
-                    egui::DragValue::new(&mut scale_edit)
-                        .range(0.5..=3.0)
-                        .speed(0.01)
-                        .fixed_decimals(2)
-                        .prefix("UI x"),
-                );
-                scale_dragging = scale.changed();
-                scale_done = scale.drag_stopped() || scale.lost_focus();
+                egui::ComboBox::from_id_salt("ui-scale")
+                    .selected_text(format!("UI x{current_scale:.2}"))
+                    .show_ui(ui, |ui| {
+                        for preset in window::SCALE_PRESETS {
+                            let on = (current_scale - preset).abs() < 1e-3;
+                            if ui.selectable_label(on, format!("{preset:.2}")).clicked() {
+                                picked_scale = Some(preset);
+                            }
+                        }
+                    });
                 egui::ComboBox::from_label("Zip encoding")
                     .selected_text(encoding_label(self.encoding))
                     .show_ui(ui, |ui| {
@@ -723,13 +730,8 @@ impl eframe::App for App {
         if fullscreen_click {
             self.toggle_fullscreen();
         }
-        if scale_dragging {
-            self.scale = scale_edit;
-            self.settings.ui_scale = Some(scale_edit);
-            self.zoom_request = Some(scale_edit);
-        }
-        if scale_done {
-            self.save_settings();
+        if let Some(scale) = picked_scale {
+            self.set_ui_scale(scale);
         }
 
         let hint = match self.context() {
@@ -805,57 +807,60 @@ impl eframe::App for App {
                     .map(|e| card_of(e, self.infos.get(&e.game.id)))
                     .collect();
                 let order = browse::browse(&cards, &self.query);
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    let spacing = ui.spacing().item_spacing.x;
-                    let columns = ((ui.available_width() + spacing) / (CELL_WIDTH + spacing))
-                        .floor()
-                        .max(1.0) as usize;
-                    self.columns = columns;
-                    for row in order.chunks(columns) {
-                        ui.horizontal_top(|ui| {
-                            for &i in row {
-                                let entry = &entries[i];
-                                let tile = Tile {
-                                    entry,
-                                    info: self.infos.get(&entry.game.id),
-                                    error: self.errors.get(&entry.game.id).map(String::as_str),
-                                    busy: self.busy.contains(&entry.game.id),
-                                    running: self.launcher.is_running(&entry.game.dir),
-                                    focused: self.focus_id.as_ref() == Some(&entry.game.id),
-                                };
-                                let action = tile_ui(ui, &tile);
-                                if tile.focused && self.scroll_to_focus {
-                                    ui.scroll_to_rect(action.rect.expand(8.0), None);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let spacing = ui.spacing().item_spacing.x;
+                        let columns = ((ui.available_width() + spacing) / (CELL_WIDTH + spacing))
+                            .floor()
+                            .max(1.0) as usize;
+                        self.columns = columns;
+                        for row in order.chunks(columns) {
+                            ui.horizontal_top(|ui| {
+                                for &i in row {
+                                    let entry = &entries[i];
+                                    let tile = Tile {
+                                        entry,
+                                        info: self.infos.get(&entry.game.id),
+                                        error: self.errors.get(&entry.game.id).map(String::as_str),
+                                        busy: self.busy.contains(&entry.game.id),
+                                        running: self.launcher.is_running(&entry.game.dir),
+                                        focused: self.focus_id.as_ref() == Some(&entry.game.id),
+                                    };
+                                    let action = tile_ui(ui, &tile);
+                                    if tile.focused && self.scroll_to_focus {
+                                        ui.scroll_to_rect(action.rect.expand(8.0), None);
+                                    }
+                                    if action.clicked
+                                        || action.launch
+                                        || action.details
+                                        || action.favorite
+                                        || action.extract.is_some()
+                                    {
+                                        clicked_focus = Some(entry.game.id.clone());
+                                    }
+                                    if let Some(dir) = action.extract {
+                                        extract_dir = Some(dir);
+                                    }
+                                    if action.launch {
+                                        launch = Some(i);
+                                    }
+                                    if action.favorite {
+                                        favorite_id = Some(entry.game.id.clone());
+                                    }
+                                    if action.details {
+                                        open_details = Some(entry.game.id.clone());
+                                    }
+                                    // One click only moves the focus (done above); two open the game.
+                                    if action.double_clicked && needs_choice(entry) {
+                                        open_chooser = Some(i);
+                                    } else if action.double_clicked {
+                                        open_details = Some(entry.game.id.clone());
+                                    }
                                 }
-                                if action.clicked
-                                    || action.launch
-                                    || action.details
-                                    || action.favorite
-                                    || action.extract.is_some()
-                                {
-                                    clicked_focus = Some(entry.game.id.clone());
-                                }
-                                if let Some(dir) = action.extract {
-                                    extract_dir = Some(dir);
-                                }
-                                if action.launch {
-                                    launch = Some(i);
-                                }
-                                if action.favorite {
-                                    favorite_id = Some(entry.game.id.clone());
-                                }
-                                if action.details {
-                                    open_details = Some(entry.game.id.clone());
-                                }
-                                if action.clicked && needs_choice(entry) {
-                                    open_chooser = Some(i);
-                                } else if action.clicked {
-                                    open_details = Some(entry.game.id.clone());
-                                }
-                            }
-                        });
-                    }
-                });
+                            });
+                        }
+                    });
             }
         });
 
@@ -964,18 +969,20 @@ struct Tile<'a> {
 struct TileAction {
     launch: bool,
     clicked: bool,
+    double_clicked: bool,
     extract: Option<PathBuf>,
     favorite: bool,
     details: bool,
     rect: egui::Rect,
 }
 
-/// Draws one game tile: cover, title, exe status and a Reload button.
+/// Draws one game tile: cover, title, status and the Launch, Details and Favorite buttons.
 fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
     let game = &tile.entry.game;
     let mut action = TileAction {
         launch: false,
         clicked: false,
+        double_clicked: false,
         extract: None,
         favorite: false,
         details: false,
@@ -989,6 +996,7 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
                 let size = egui::vec2(TILE_WIDTH, 150.0);
                 let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
                 action.clicked = response.clicked();
+                action.double_clicked = response.double_clicked();
                 ui.painter()
                     .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
                 let cover = tile
@@ -1048,19 +1056,23 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
                     let not_extracted = matches!(tile.entry.extract, Ok(Status::NotExtracted));
                     let ready = matches!(tile.entry.state, Ok(ExeState::Ready { .. }));
                     if tile.running {
-                        ui.add_enabled(false, egui::Button::new("Launch"));
+                        icon_button(ui, Icon::Play, "Running", false);
                     } else if not_extracted {
                         if ui.button("Extract").clicked() {
                             action.extract = Some(game.dir.clone());
                         }
                     } else {
-                        action.launch =
-                            ui.add_enabled(ready, egui::Button::new("Launch")).clicked();
+                        action.launch = icon_button(ui, Icon::Play, "Launch", ready).clicked();
                     }
-                    action.details = ui.button("Details").clicked();
-                    action.favorite = ui
-                        .selectable_label(tile.entry.stats.favorite, "Fav")
-                        .clicked();
+                    action.details = icon_button(ui, Icon::Info, "Details", true).clicked();
+                    let favorite = tile.entry.stats.favorite;
+                    let tip = if favorite {
+                        "Remove from favorites"
+                    } else {
+                        "Add to favorites"
+                    };
+                    action.favorite =
+                        icon_button(ui, Icon::Heart { filled: favorite }, tip, true).clicked();
                 });
             });
         });

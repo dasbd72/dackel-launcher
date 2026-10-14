@@ -2,7 +2,8 @@
 
 use crate::settings::Settings;
 
-const SCALE_PRESETS: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
+/// UI scales offered in the dropdown, and cycled through by the controller.
+pub const SCALE_PRESETS: [f32; 7] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 
 /// True in a Steam Deck / Gamescope session. A desktop that merely has gamescope
 /// configured (e.g. a `GAMESCOPECMD` variable) is not.

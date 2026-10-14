@@ -1,11 +1,27 @@
 //! The per-game details page and the exe chooser list it shares with the grid.
 
+use crate::icons::{CHIP_PAD_Y, Icon, chip, icon_text_button};
 use dlsite_launcher::browse::format_play_time;
 use dlsite_launcher::extract::Status;
 use dlsite_launcher::info::GameInfo;
 use dlsite_launcher::profile::Stats;
 use eframe::egui;
 use std::path::{Path, PathBuf};
+
+const COVER_WIDTH: f32 = 420.0;
+
+/// The label of an info row. Rows are top-aligned; `pad_top` lines the label's text up
+/// with a value that sits inside a padded chip.
+fn row_label(ui: &mut egui::Ui, text: &str, pad_top: f32) {
+    ui.vertical(|ui| {
+        ui.add_space(pad_top);
+        // Never wrap: "Play time" and "Choose exe" must stay on one line.
+        ui.add(
+            egui::Label::new(egui::RichText::new(text).weak())
+                .wrap_mode(egui::TextWrapMode::Extend),
+        );
+    });
+}
 
 pub struct DetailsView<'a> {
     pub id: &'a str,
@@ -65,16 +81,23 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
     ui.separator();
 
     ui.horizontal_top(|ui| {
-        let size = egui::vec2(240.0, 340.0);
-        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-        ui.painter()
-            .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
+        // The cover takes the height its own aspect ratio gives it: no empty bands.
         match view.cover.as_ref().filter(|p| p.exists()) {
             Some(path) => {
                 let uri = format!("file://{}", path.display());
-                ui.put(rect, egui::Image::new(uri).max_size(size));
+                ui.add(
+                    egui::Image::new(uri)
+                        .max_width(COVER_WIDTH)
+                        .corner_radius(6.0),
+                );
             }
             None => {
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(COVER_WIDTH, COVER_WIDTH * 0.75),
+                    egui::Sense::hover(),
+                );
+                ui.painter()
+                    .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -86,54 +109,63 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
         }
 
         ui.vertical(|ui| {
-            ui.label(format!(
-                "Circle: {}",
-                view.info
-                    .and_then(|info| info.circle.as_deref())
-                    .unwrap_or("--")
-            ));
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Tags:");
-                let genres = view.info.map(|info| info.genres.as_slice()).unwrap_or(&[]);
-                if genres.is_empty() {
-                    ui.weak("--");
-                }
-                for genre in genres {
-                    ui.label(format!("[{genre}]"));
-                }
-            });
-            ui.label(format!(
-                "Play time: {}",
-                format_play_time(view.stats.play_time_secs)
-            ));
+            // Two columns, so every label lines up and so does every value.
+            egui::Grid::new("details-info")
+                .num_columns(2)
+                .spacing([16.0, 6.0])
+                .show(ui, |ui| {
+                    let chip_pad = f32::from(CHIP_PAD_Y);
 
-            let star = if view.stats.favorite {
-                "Unfavorite"
-            } else {
-                "Favorite"
-            };
-            if ui.button(star).clicked() {
-                action.toggle_favorite = true;
-            }
+                    row_label(ui, "Circle", chip_pad);
+                    match view.info.and_then(|i| i.circle.as_deref()) {
+                        Some(circle) => chip(ui, circle),
+                        None => {
+                            ui.weak("--");
+                        }
+                    }
+                    ui.end_row();
 
-            ui.separator();
-            match view.exe {
-                Some(exe) => ui.label(format!("Exe: {}", exe.display())),
-                None => ui.label("Exe: not chosen"),
-            };
-            if !view.candidates.is_empty() {
-                ui.label("Choose exe:");
-                action.choose_exe = exe_choices(ui, view.candidates, None);
-            }
+                    row_label(ui, "Tags", chip_pad);
+                    ui.horizontal_wrapped(|ui| {
+                        let genres = view.info.map(|i| i.genres.as_slice()).unwrap_or(&[]);
+                        if genres.is_empty() {
+                            ui.weak("--");
+                        }
+                        for genre in genres {
+                            chip(ui, genre);
+                        }
+                    });
+                    ui.end_row();
 
-            ui.separator();
+                    row_label(ui, "Play time", 0.0);
+                    ui.label(format_play_time(view.stats.play_time_secs));
+                    ui.end_row();
+
+                    row_label(ui, "Exe", 0.0);
+                    match view.exe {
+                        Some(exe) => {
+                            ui.label(exe.display().to_string());
+                        }
+                        None => {
+                            ui.weak("not chosen");
+                        }
+                    }
+                    ui.end_row();
+
+                    if !view.candidates.is_empty() {
+                        row_label(ui, "Choose exe", 0.0);
+                        ui.vertical(|ui| {
+                            action.choose_exe = exe_choices(ui, view.candidates, None);
+                        });
+                        ui.end_row();
+                    }
+                });
+
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if view.running {
                     ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
-                } else if ui
-                    .add_enabled(view.exe.is_some(), egui::Button::new("Launch"))
-                    .clicked()
-                {
+                } else if icon_text_button(ui, Icon::Play, "Launch", view.exe.is_some()).clicked() {
                     action.launch = true;
                 }
                 let label = if view.busy {
@@ -166,6 +198,11 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
                     }
                     Ok(Status::Ready { has_zip: false }) => {}
                 }
+                let favorite = view.stats.favorite;
+                let label = if favorite { "Unfavorite" } else { "Favorite" };
+                if icon_text_button(ui, Icon::Heart { filled: favorite }, label, true).clicked() {
+                    action.toggle_favorite = true;
+                }
             });
             if let Some(err) = view.error {
                 ui.colored_label(egui::Color32::LIGHT_RED, err);
@@ -182,9 +219,19 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
             if !info.found {
                 ui.weak("No DLsite page was found for this work; showing the folder name.");
             }
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.label(&info.description);
-            });
+            // A box as wide as the window; the text wraps to it.
+            egui::Frame::new()
+                .fill(ui.visuals().extreme_bg_color)
+                .corner_radius(6.0)
+                .inner_margin(egui::Margin::same(12))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.label(&info.description);
+                        });
+                });
         }
     }
     action

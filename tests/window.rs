@@ -1,7 +1,7 @@
 use dlsite_launcher::settings::Settings;
 use dlsite_launcher::window::{
-    default_ui_scale, initial_fullscreen, is_deck_like, is_native_wayland, next_scale,
-    should_minimize_on_launch,
+    SCALE_PRESETS, default_ui_scale, initial_fullscreen, is_deck_like, is_native_wayland,
+    next_scale, should_minimize_on_launch,
 };
 use std::collections::HashMap;
 
@@ -85,20 +85,31 @@ fn a_saved_fullscreen_choice_beats_the_environment() {
 }
 
 #[test]
+fn the_presets_run_from_half_size_to_double_in_quarter_steps() {
+    assert_eq!(SCALE_PRESETS, [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]);
+}
+
+#[test]
+fn both_machine_defaults_are_selectable_presets() {
+    assert!(SCALE_PRESETS.contains(&default_ui_scale(false)));
+    assert!(SCALE_PRESETS.contains(&default_ui_scale(true)));
+}
+
+#[test]
 fn scale_cycles_through_the_presets_and_wraps() {
+    assert_eq!(next_scale(0.5), 0.75);
     assert_eq!(next_scale(1.0), 1.25);
-    assert_eq!(next_scale(1.25), 1.5);
-    assert_eq!(next_scale(1.5), 2.0);
-    assert_eq!(next_scale(2.0), 1.0);
+    assert_eq!(next_scale(1.75), 2.0);
+    assert_eq!(next_scale(2.0), 0.5);
 }
 
 #[test]
 fn an_off_preset_scale_moves_to_the_next_larger_preset() {
     assert_eq!(next_scale(1.1), 1.25);
-    assert_eq!(next_scale(0.8), 1.0);
+    assert_eq!(next_scale(0.3), 0.5);
     assert_eq!(
         next_scale(2.6),
-        1.0,
+        0.5,
         "beyond the largest wraps to the smallest"
     );
 }
