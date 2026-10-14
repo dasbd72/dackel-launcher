@@ -21,8 +21,7 @@ pub fn resolve_library(exe_path: &Path, override_dir: Option<&Path>) -> io::Resu
 pub struct Game {
     pub id: String,
     pub dir: PathBuf,
-    /// Which entry of the library list the game came from. The same folder can be listed
-    /// twice, and then every game in it shows twice, once per slot.
+    /// Which entry of the library list the game came from.
     pub slot: usize,
 }
 
@@ -110,8 +109,24 @@ pub fn add_library(listed: &[PathBuf], typed: &str) -> Result<PathBuf, AddLibrar
     Ok(real)
 }
 
+/// The libraries to scan: the list with repeats dropped, the first of each kept. Two
+/// spellings of one folder (a trailing slash, a symlink) count as the same folder.
+pub fn unique_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let real = |root: &PathBuf| root.canonicalize().unwrap_or_else(|_| root.clone());
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut kept = Vec::new();
+    for root in roots {
+        let key = real(root);
+        if !seen.contains(&key) {
+            seen.push(key);
+            kept.push(root.clone());
+        }
+    }
+    kept
+}
+
 /// Short names for a list of libraries: the folder name, or the full path when two
-/// libraries share a folder name. The same folder listed again gets "(2)", "(3)"...
+/// libraries share a folder name. (The app lists each folder once; a repeat would get "(2)".)
 pub fn library_labels(roots: &[PathBuf]) -> Vec<String> {
     let name = |root: &Path| root.file_name().map(|n| n.to_string_lossy().into_owned());
     roots

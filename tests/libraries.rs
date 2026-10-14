@@ -1,4 +1,6 @@
-use dlsite_launcher::library::{AddLibraryError, add_library, library_labels, scan_all};
+use dlsite_launcher::library::{
+    AddLibraryError, add_library, library_labels, scan_all, unique_roots,
+};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
@@ -180,5 +182,44 @@ mod labels {
                 "Other"
             ]
         );
+    }
+}
+
+mod unique {
+    use super::*;
+
+    #[test]
+    fn a_folder_listed_again_is_dropped_keeping_the_first_in_order() {
+        let a = library_with(&[]);
+        let b = library_with(&[]);
+        let roots = vec![
+            a.path().to_path_buf(),
+            b.path().to_path_buf(),
+            a.path().to_path_buf(),
+        ];
+
+        assert_eq!(
+            unique_roots(&roots),
+            [a.path().to_path_buf(), b.path().to_path_buf()]
+        );
+    }
+
+    #[test]
+    fn different_spellings_of_one_folder_count_as_one() {
+        let a = library_with(&[]);
+        let roots = vec![
+            a.path().to_path_buf(),
+            PathBuf::from(format!("{}/", a.path().display())),
+            PathBuf::from(format!("{}/.", a.path().display())),
+        ];
+
+        assert_eq!(unique_roots(&roots), [a.path().to_path_buf()]);
+    }
+
+    #[test]
+    fn an_offline_folder_listed_twice_is_dropped_by_its_text() {
+        let gone = PathBuf::from("/run/media/nobody/GONE/DLSiteLibrary");
+
+        assert_eq!(unique_roots(&[gone.clone(), gone.clone()]), [gone]);
     }
 }

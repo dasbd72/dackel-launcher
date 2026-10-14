@@ -12,7 +12,9 @@ use dlsite_launcher::fonts;
 use dlsite_launcher::info::{GameInfo, cover_path, load};
 use dlsite_launcher::jobs::{ExtractJob, JobStatus};
 use dlsite_launcher::launch::{Launcher, UmuSpawner, unix_now};
-use dlsite_launcher::library::{Game, add_library, library_labels, resolve_library, scan_all};
+use dlsite_launcher::library::{
+    Game, add_library, library_labels, resolve_library, scan_all, unique_roots,
+};
 use dlsite_launcher::nav::{
     self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Debounce, Input,
     Repeater,
@@ -312,9 +314,15 @@ struct App {
 
 impl App {
     fn new(library: PathBuf, startup: Startup) -> Self {
-        let libraries = std::iter::once(library.clone())
+        // A folder listed twice (say, the one beside the program added again) shows once.
+        let all: Vec<PathBuf> = std::iter::once(library.clone())
             .chain(startup.settings.libraries.iter().cloned())
             .collect();
+        let libraries = unique_roots(&all);
+        let mut startup = startup;
+        let added = libraries[1..].to_vec();
+        let tidy = startup.settings.libraries != added;
+        startup.settings.libraries = added;
         let mut app = App {
             library,
             libraries,
@@ -369,6 +377,9 @@ impl App {
             restore: Restore::default(),
             started: std::time::Instant::now(),
         };
+        if tidy {
+            app.save_settings();
+        }
         app.rescan();
         app
     }
@@ -910,9 +921,7 @@ impl App {
                 }
             });
         if add {
-            // Only the added libraries count as duplicates: listing the folder beside the program
-            // again is allowed, and then its games show twice.
-            match add_library(&self.settings.libraries, &self.library_input) {
+            match add_library(&self.libraries, &self.library_input) {
                 Ok(path) => {
                     self.settings.libraries.push(path.clone());
                     self.libraries.push(path);
@@ -926,8 +935,7 @@ impl App {
         }
         if let Some(i) = remove {
             let gone = self.libraries.remove(i);
-            // Slot 0 is the library beside the program; the added ones follow it.
-            self.settings.libraries.remove(i - 1);
+            self.settings.libraries.retain(|l| *l != gone);
             // Later slots move up, so keys, the filter and the open page would point at the
             // wrong games: go back to the grid with no filter.
             self.library_filter = None;
