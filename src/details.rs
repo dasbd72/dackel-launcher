@@ -57,6 +57,10 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
             action.back = true;
         }
         ui.heading(title);
+        // Without scraped info the heading already is the RJ code.
+        if title != view.id {
+            ui.label(egui::RichText::new(view.id).monospace().weak());
+        }
     });
     ui.separator();
 
