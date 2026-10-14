@@ -1,51 +1,3 @@
-use dlsite_launcher::nav::{Dir, move_focus};
-
-// A 7-item grid, 3 columns:
-//   0 1 2
-//   3 4 5
-//   6
-#[test]
-fn right_and_left_move_within_a_row_and_stop_at_its_edges() {
-    assert_eq!(move_focus(0, 7, 3, Dir::Right), 1);
-    assert_eq!(move_focus(1, 7, 3, Dir::Right), 2);
-    assert_eq!(
-        move_focus(2, 7, 3, Dir::Right),
-        2,
-        "no wrap to the next row"
-    );
-    assert_eq!(move_focus(2, 7, 3, Dir::Left), 1);
-    assert_eq!(
-        move_focus(3, 7, 3, Dir::Left),
-        3,
-        "no wrap to the previous row"
-    );
-}
-
-#[test]
-fn up_and_down_move_by_a_row() {
-    assert_eq!(move_focus(1, 7, 3, Dir::Down), 4);
-    assert_eq!(move_focus(4, 7, 3, Dir::Up), 1);
-    assert_eq!(move_focus(1, 7, 3, Dir::Up), 1, "top row stays");
-}
-
-#[test]
-fn down_into_a_short_last_row_lands_on_its_last_item() {
-    assert_eq!(move_focus(4, 7, 3, Dir::Down), 6);
-    assert_eq!(move_focus(5, 7, 3, Dir::Down), 6);
-    assert_eq!(move_focus(6, 7, 3, Dir::Down), 6, "bottom row stays");
-}
-
-#[test]
-fn right_stops_at_the_last_item_of_a_short_row() {
-    assert_eq!(move_focus(6, 7, 3, Dir::Right), 6);
-}
-
-#[test]
-fn an_out_of_range_focus_is_pulled_back_into_the_list() {
-    assert_eq!(move_focus(9, 7, 3, Dir::Up), 3);
-    assert_eq!(move_focus(5, 0, 3, Dir::Down), 0, "empty list");
-}
-
 mod commands {
     use dlsite_launcher::nav::{Command, Context, Dir, Input, command};
 
@@ -62,22 +14,14 @@ mod commands {
     }
 
     #[test]
-    fn grid_buttons_launch_reload_open_details_and_switch_sort() {
+    fn grid_buttons_launch_reload_and_open_details() {
         assert_eq!(command(Context::Grid, Input::A), Some(Command::Primary));
         assert_eq!(command(Context::Grid, Input::X), Some(Command::Reload));
         assert_eq!(command(Context::Grid, Input::Y), Some(Command::OpenDetails));
-        assert_eq!(
-            command(Context::Grid, Input::LeftBumper),
-            Some(Command::CycleSort(-1))
-        );
-        assert_eq!(
-            command(Context::Grid, Input::RightBumper),
-            Some(Command::CycleSort(1))
-        );
     }
 
     #[test]
-    fn grid_has_controller_access_to_rescan_filters_and_zip_encoding() {
+    fn grid_has_controller_access_to_rescan_and_the_filters() {
         assert_eq!(command(Context::Grid, Input::Start), Some(Command::Rescan));
         assert_eq!(
             command(Context::Grid, Input::Select),
@@ -86,14 +30,6 @@ mod commands {
         assert_eq!(
             command(Context::Grid, Input::B),
             Some(Command::ResetFilters)
-        );
-        assert_eq!(
-            command(Context::Grid, Input::LeftTrigger),
-            Some(Command::CycleEncoding(-1))
-        );
-        assert_eq!(
-            command(Context::Grid, Input::RightTrigger),
-            Some(Command::CycleEncoding(1))
         );
     }
 
@@ -109,20 +45,15 @@ mod commands {
     }
 
     #[test]
-    fn details_page_reaches_the_exe_chooser_and_re_extract_from_the_bumpers() {
+    fn the_dpad_moves_focus_between_the_buttons_on_the_details_page() {
         assert_eq!(
-            command(Context::Details, Input::LeftBumper),
-            Some(Command::ChooseExe)
+            command(Context::Details, Input::Up),
+            Some(Command::Move(Dir::Up))
         );
         assert_eq!(
-            command(Context::Details, Input::RightBumper),
-            Some(Command::ReExtract)
+            command(Context::Details, Input::Right),
+            Some(Command::Move(Dir::Right))
         );
-    }
-
-    #[test]
-    fn details_page_ignores_the_dpad() {
-        assert_eq!(command(Context::Details, Input::Up), None);
     }
 
     #[test]
@@ -211,16 +142,11 @@ mod window_controls {
     use dlsite_launcher::nav::{Command, Context, Input, command};
 
     #[test]
-    fn stick_clicks_toggle_fullscreen_and_cycle_the_ui_scale_everywhere() {
+    fn the_fullscreen_key_works_everywhere_including_behind_a_modal() {
         for context in [Context::Grid, Context::Details, Context::Chooser] {
             assert_eq!(
-                command(context, Input::RightStickClick),
+                command(context, Input::ToggleFullscreen),
                 Some(Command::ToggleFullscreen),
-                "{context:?}"
-            );
-            assert_eq!(
-                command(context, Input::LeftStickClick),
-                Some(Command::CycleUiScale),
                 "{context:?}"
             );
         }
@@ -239,5 +165,113 @@ mod blur {
                 "{context:?}"
             );
         }
+    }
+}
+
+mod spatial {
+    use dlsite_launcher::nav::{Bounds, Dir, spatial_next};
+
+    fn b(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
+        Bounds {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    // A miniature of the real screen:
+    //   toolbar row 1:  A  B
+    //   toolbar row 2:  C                 D
+    //   tiles row 1:    T1  T2  T3
+    //   tiles row 2:    T4
+    const A: usize = 0;
+    const B: usize = 1;
+    const C: usize = 2;
+    const D: usize = 3;
+    const T1: usize = 4;
+    const T2: usize = 5;
+    const T3: usize = 6;
+    const T4: usize = 7;
+
+    fn screen() -> Vec<Bounds> {
+        vec![
+            b(0.0, 0.0, 80.0, 34.0),
+            b(90.0, 0.0, 200.0, 34.0),
+            b(0.0, 44.0, 150.0, 78.0),
+            b(700.0, 44.0, 850.0, 78.0),
+            b(10.0, 100.0, 210.0, 400.0),
+            b(220.0, 100.0, 420.0, 400.0),
+            b(430.0, 100.0, 630.0, 400.0),
+            b(10.0, 410.0, 210.0, 710.0),
+        ]
+    }
+
+    #[test]
+    fn right_and_left_walk_along_a_row_and_stop_at_its_ends() {
+        let s = screen();
+        assert_eq!(spatial_next(&s, A, Dir::Right), B);
+        assert_eq!(spatial_next(&s, T1, Dir::Right), T2);
+        assert_eq!(spatial_next(&s, T2, Dir::Right), T3);
+        assert_eq!(
+            spatial_next(&s, T3, Dir::Right),
+            T3,
+            "nothing further right"
+        );
+        assert_eq!(spatial_next(&s, T3, Dir::Left), T2);
+        assert_eq!(spatial_next(&s, T1, Dir::Left), T1, "nothing further left");
+    }
+
+    #[test]
+    fn down_into_a_short_last_row_lands_on_its_only_tile() {
+        let s = screen();
+        assert_eq!(spatial_next(&s, T1, Dir::Down), T4);
+        assert_eq!(spatial_next(&s, T3, Dir::Down), T4);
+        assert_eq!(spatial_next(&s, T4, Dir::Down), T4, "bottom stays");
+    }
+
+    #[test]
+    fn up_from_the_first_row_of_tiles_reaches_the_nearest_toolbar_control() {
+        let s = screen();
+        assert_eq!(
+            spatial_next(&s, T1, Dir::Up),
+            C,
+            "C is above T1's left side"
+        );
+        assert_eq!(
+            spatial_next(&s, T3, Dir::Up),
+            D,
+            "D is the closer one above T3"
+        );
+    }
+
+    #[test]
+    fn down_from_the_toolbar_steps_through_its_rows_then_into_the_tiles() {
+        let s = screen();
+        assert_eq!(spatial_next(&s, A, Dir::Down), C);
+        assert_eq!(spatial_next(&s, C, Dir::Down), T1);
+        assert_eq!(spatial_next(&s, A, Dir::Up), A, "top stays");
+    }
+
+    #[test]
+    fn a_control_in_line_beats_a_nearer_one_that_is_far_off_to_the_side() {
+        let s = vec![
+            b(0.0, 0.0, 100.0, 50.0),      // current
+            b(120.0, 400.0, 220.0, 450.0), // close in x, far below
+            b(300.0, 0.0, 400.0, 50.0),    // farther, but in the same row
+        ];
+        assert_eq!(spatial_next(&s, 0, Dir::Right), 2);
+    }
+
+    #[test]
+    fn with_nothing_to_move_to_focus_stays_put() {
+        let one = vec![b(0.0, 0.0, 10.0, 10.0)];
+        assert_eq!(spatial_next(&one, 0, Dir::Down), 0);
+        assert_eq!(spatial_next(&[], 0, Dir::Left), 0);
+        assert_eq!(
+            spatial_next(&one, 5, Dir::Left),
+            5,
+            "unknown current is returned as is"
+        );
     }
 }

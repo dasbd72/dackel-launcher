@@ -1,10 +1,12 @@
 //! The per-game details page and the exe chooser list it shares with the grid.
 
 use crate::covers::CoverView;
+use crate::focus::FocusFrame;
 use crate::icons::{CHIP_PAD_Y, Icon, chip, icon_text_button};
 use dlsite_launcher::browse::format_play_time;
 use dlsite_launcher::extract::{Progress, Status};
 use dlsite_launcher::info::GameInfo;
+use dlsite_launcher::nav::Control;
 use dlsite_launcher::profile::Stats;
 use eframe::egui;
 use std::path::{Path, PathBuf};
@@ -52,29 +54,37 @@ pub struct DetailsAction {
 }
 
 /// Lists exe candidates as buttons; returns the one clicked, if any.
-/// `selected` marks the entry a controller cursor is on.
+/// `selected` marks the entry a controller cursor is on in a modal list. With a `frame`
+/// the buttons are focusable themselves (the details page).
 pub fn exe_choices(
     ui: &mut egui::Ui,
     candidates: &[PathBuf],
     selected: Option<usize>,
+    mut frame: Option<&mut FocusFrame>,
 ) -> Option<PathBuf> {
     let mut chosen = None;
     for (i, candidate) in candidates.iter().enumerate() {
         let button =
             egui::Button::new(candidate.display().to_string()).selected(selected == Some(i));
-        if ui.add(button).clicked() {
+        let response = ui.add(button);
+        let pressed = match frame.as_deref_mut() {
+            Some(frame) => frame.pressed(ui, Control::ExeChoice(i), &response, true),
+            None => response.clicked(),
+        };
+        if pressed {
             chosen = Some(candidate.clone());
         }
     }
     chosen
 }
 
-pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
+pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView, frame: &mut FocusFrame) -> DetailsAction {
     let mut action = DetailsAction::default();
     let title = view.info.map_or(view.id, |info| info.title.as_str());
 
     ui.horizontal(|ui| {
-        if ui.button("Back").clicked() {
+        let response = ui.button("Back");
+        if frame.pressed(ui, Control::Back, &response, true) {
             action.back = true;
         }
         ui.heading(title);
@@ -181,7 +191,8 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
                     if !view.candidates.is_empty() {
                         row_label(ui, "Choose exe", 0.0);
                         ui.vertical(|ui| {
-                            action.choose_exe = exe_choices(ui, view.candidates, None);
+                            action.choose_exe =
+                                exe_choices(ui, view.candidates, None, Some(&mut *frame));
                         });
                         ui.end_row();
                     }
@@ -200,26 +211,27 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
                                 progress.files_done, progress.files_total
                             )),
                     );
-                    if icon_text_button(ui, Icon::Close, "Cancel", true).clicked() {
+                    let response = icon_text_button(ui, Icon::Close, "Cancel", true);
+                    if frame.pressed(ui, Control::CancelExtract, &response, true) {
                         action.cancel_extract = true;
                     }
                 } else {
                     if view.running {
                         ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
-                    } else if icon_text_button(ui, Icon::Play, "Launch", view.exe.is_some())
-                        .clicked()
-                    {
-                        action.launch = true;
+                    } else {
+                        let ready = view.exe.is_some();
+                        let response = icon_text_button(ui, Icon::Play, "Launch", ready);
+                        if frame.pressed(ui, Control::Launch, &response, ready) {
+                            action.launch = true;
+                        }
                     }
                     let label = if view.busy {
                         "Reloading..."
                     } else {
                         "Reload info"
                     };
-                    if ui
-                        .add_enabled(!view.busy, egui::Button::new(label))
-                        .clicked()
-                    {
+                    let response = ui.add_enabled(!view.busy, egui::Button::new(label));
+                    if frame.pressed(ui, Control::ReloadInfo, &response, !view.busy) {
                         action.reload = true;
                     }
                     match view.extract {
@@ -227,7 +239,8 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
                             ui.colored_label(egui::Color32::LIGHT_RED, msg);
                         }
                         Ok(Status::NotExtracted) => {
-                            if ui.button("Extract").clicked() {
+                            let response = ui.button("Extract");
+                            if frame.pressed(ui, Control::Extract, &response, true) {
                                 action.extract = true;
                             }
                         }
@@ -235,7 +248,8 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
                             ui.colored_label(egui::Color32::YELLOW, "extract manually");
                         }
                         Ok(Status::Ready { has_zip: true }) => {
-                            if ui.button("Re-extract").clicked() {
+                            let response = ui.button("Re-extract");
+                            if frame.pressed(ui, Control::Extract, &response, true) {
                                 action.extract = true;
                             }
                         }
@@ -244,7 +258,8 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
                 }
                 let favorite = view.stats.favorite;
                 let label = if favorite { "Unfavorite" } else { "Favorite" };
-                if icon_text_button(ui, Icon::Heart { filled: favorite }, label, true).clicked() {
+                let response = icon_text_button(ui, Icon::Heart { filled: favorite }, label, true);
+                if frame.pressed(ui, Control::Favorite, &response, true) {
                     action.toggle_favorite = true;
                 }
             });

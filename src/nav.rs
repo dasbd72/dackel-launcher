@@ -8,24 +8,6 @@ pub enum Dir {
     Right,
 }
 
-/// Moves focus through a grid of `len` items laid out `columns` wide.
-/// Edges stop rather than wrap; moving down into a short last row lands on its last item.
-pub fn move_focus(index: usize, len: usize, columns: usize, dir: Dir) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    let columns = columns.max(1);
-    let index = index.min(len - 1);
-    match dir {
-        Dir::Left if !index.is_multiple_of(columns) => index - 1,
-        Dir::Right if !(index + 1).is_multiple_of(columns) && index + 1 < len => index + 1,
-        Dir::Up if index >= columns => index - columns,
-        Dir::Down if index + columns < len => index + columns,
-        Dir::Down if index / columns < (len - 1) / columns => len - 1,
-        _ => index,
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Input {
     Up,
@@ -36,14 +18,11 @@ pub enum Input {
     B,
     X,
     Y,
-    LeftBumper,
-    RightBumper,
-    LeftTrigger,
-    RightTrigger,
     Start,
     Select,
-    LeftStickClick,
-    RightStickClick,
+    /// Keyboard only (F11).
+    ToggleFullscreen,
+    /// Keyboard only (B).
     ToggleBlur,
 }
 
@@ -57,17 +36,14 @@ pub enum Context {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
+    /// Move focus to the nearest control or game in a direction.
     Move(Dir),
-    /// Launch the game, or extract / pick an exe when it is not launchable yet.
+    /// Press the focused control, or launch / extract / pick an exe for the focused game.
     Primary,
     Reload,
     OpenDetails,
     Back,
     ToggleFavorite,
-    ChooseExe,
-    ReExtract,
-    CycleSort(i32),
-    CycleEncoding(i32),
     Rescan,
     ToggleFavoritesOnly,
     ResetFilters,
@@ -75,8 +51,29 @@ pub enum Command {
     ChooserPick,
     ChooserCancel,
     ToggleFullscreen,
-    CycleUiScale,
     ToggleBlur,
+}
+
+/// Every control the controller can focus besides the game tiles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Control {
+    // Toolbar.
+    Rescan,
+    Fullscreen,
+    Blur,
+    Scale,
+    Encoding,
+    Sort,
+    FavoritesOnly,
+    // Details page.
+    Back,
+    /// One of the exe candidates listed on the details page.
+    ExeChoice(usize),
+    Launch,
+    ReloadInfo,
+    Extract,
+    CancelExtract,
+    Favorite,
 }
 
 pub fn command(context: Context, input: Input) -> Option<Command> {
@@ -84,8 +81,7 @@ pub fn command(context: Context, input: Input) -> Option<Command> {
     use Input as I;
     match (context, input) {
         // Window controls work everywhere, including behind a modal.
-        (_, I::RightStickClick) => Some(ToggleFullscreen),
-        (_, I::LeftStickClick) => Some(CycleUiScale),
+        (_, I::ToggleFullscreen) => Some(ToggleFullscreen),
         (_, I::ToggleBlur) => Some(ToggleBlur),
 
         (Context::Chooser, I::Up) => Some(ChooserMove(-1)),
@@ -94,22 +90,18 @@ pub fn command(context: Context, input: Input) -> Option<Command> {
         (Context::Chooser, I::B) => Some(ChooserCancel),
         (Context::Chooser, _) => None,
 
-        (Context::Grid, I::Up) => Some(Move(Dir::Up)),
-        (Context::Grid, I::Down) => Some(Move(Dir::Down)),
-        (Context::Grid, I::Left) => Some(Move(Dir::Left)),
-        (Context::Grid, I::Right) => Some(Move(Dir::Right)),
+        // The D-pad moves focus on both screens; A presses what is focused.
+        (_, I::Up) => Some(Move(Dir::Up)),
+        (_, I::Down) => Some(Move(Dir::Down)),
+        (_, I::Left) => Some(Move(Dir::Left)),
+        (_, I::Right) => Some(Move(Dir::Right)),
+
         (Context::Grid, I::Y) => Some(OpenDetails),
         (Context::Grid, I::B) => Some(ResetFilters),
-        (Context::Grid, I::LeftBumper) => Some(CycleSort(-1)),
-        (Context::Grid, I::RightBumper) => Some(CycleSort(1)),
-        (Context::Grid, I::LeftTrigger) => Some(CycleEncoding(-1)),
-        (Context::Grid, I::RightTrigger) => Some(CycleEncoding(1)),
         (Context::Grid, I::Select) => Some(ToggleFavoritesOnly),
 
         (Context::Details, I::B) => Some(Back),
         (Context::Details, I::Y) => Some(ToggleFavorite),
-        (Context::Details, I::LeftBumper) => Some(ChooseExe),
-        (Context::Details, I::RightBumper) => Some(ReExtract),
 
         (_, I::A) => Some(Primary),
         (_, I::X) => Some(Reload),
@@ -160,4 +152,79 @@ impl Repeater {
         }
         None
     }
+}
+
+/// A rectangle on screen, in any consistent units (y grows downward).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bounds {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl Bounds {
+    fn center(&self) -> (f32, f32) {
+        (
+            (self.left + self.right) / 2.0,
+            (self.top + self.bottom) / 2.0,
+        )
+    }
+}
+
+/// The item to move focus to from `items[current]` in direction `dir`, or `current` when
+/// nothing lies that way.
+///
+/// Left and right only consider items that share the current item's row, so focus never
+/// jumps to a different row sideways. Up and down prefer items that overlap horizontally
+/// (the column above or below), and fall back to the nearest item in that direction when
+/// none do, which is how focus climbs from a row of tiles to the toolbar. Among the
+/// candidates, one in line beats a nearer one that is off to the side.
+pub fn spatial_next(items: &[Bounds], current: usize, dir: Dir) -> usize {
+    /// How much a sideways offset counts against a candidate, per unit, compared with
+    /// distance along the direction of travel.
+    const SIDEWAYS_WEIGHT: f32 = 3.0;
+
+    let Some(from) = items.get(current) else {
+        return current;
+    };
+    let (cx, cy) = from.center();
+    let horizontal = matches!(dir, Dir::Left | Dir::Right);
+
+    let pick = |require_overlap: bool| -> Option<usize> {
+        let mut best: Option<(f32, usize)> = None;
+        for (i, item) in items.iter().enumerate() {
+            if i == current {
+                continue;
+            }
+            let (x, y) = item.center();
+            let (along, sideways) = match dir {
+                Dir::Right => (x - cx, (y - cy).abs()),
+                Dir::Left => (cx - x, (y - cy).abs()),
+                Dir::Down => (y - cy, (x - cx).abs()),
+                Dir::Up => (cy - y, (x - cx).abs()),
+            };
+            if along <= 0.0 {
+                continue;
+            }
+            let overlaps = if horizontal {
+                item.top < from.bottom && item.bottom > from.top
+            } else {
+                item.left < from.right && item.right > from.left
+            };
+            if require_overlap && !overlaps {
+                continue;
+            }
+            let score = along + SIDEWAYS_WEIGHT * sideways;
+            if best.is_none_or(|(s, _)| score < s) {
+                best = Some((score, i));
+            }
+        }
+        best.map(|(_, i)| i)
+    };
+
+    // Sideways movement never leaves the row; vertical movement may fall back.
+    pick(true)
+        .or_else(|| if horizontal { None } else { pick(false) })
+        .unwrap_or(current)
 }

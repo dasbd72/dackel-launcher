@@ -2,7 +2,7 @@
 
 use crate::settings::Settings;
 
-/// UI scales offered in the dropdown, and cycled through by the controller.
+/// UI scales offered in the dropdown.
 pub const SCALE_PRESETS: [f32; 7] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 
 /// True in a Steam Deck / Gamescope session. A desktop that merely has gamescope
@@ -36,15 +36,6 @@ pub fn default_ui_scale(deck_like: bool) -> f32 {
 /// A saved choice wins; otherwise the Deck starts fullscreen and the desktop windowed.
 pub fn initial_fullscreen(settings: &Settings, deck_like: bool) -> bool {
     settings.fullscreen.unwrap_or(deck_like)
-}
-
-/// The next preset above `current`, wrapping to the smallest.
-pub fn next_scale(current: f32) -> f32 {
-    SCALE_PRESETS
-        .iter()
-        .copied()
-        .find(|&preset| preset > current + 1e-3)
-        .unwrap_or(SCALE_PRESETS[0])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

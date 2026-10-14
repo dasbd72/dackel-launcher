@@ -1,5 +1,6 @@
 mod covers;
 mod details;
+mod focus;
 mod icons;
 
 use covers::{BlurCache, CoverView};
@@ -12,13 +13,14 @@ use dlsite_launcher::info::{GameInfo, cover_path, load};
 use dlsite_launcher::jobs::{ExtractJob, JobStatus};
 use dlsite_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dlsite_launcher::library::{Game, resolve_library, scan};
-use dlsite_launcher::nav::{self, Command, Context, Input, Repeater};
+use dlsite_launcher::nav::{self, Command, Context, Control, Input, Repeater};
 use dlsite_launcher::profile::{self, ExeState, Stats};
 use dlsite_launcher::proton;
 use dlsite_launcher::reload::Reloads;
 use dlsite_launcher::settings::{self, Settings};
 use dlsite_launcher::window::{self, Restore, RestoreStep};
 use eframe::egui;
+use focus::{FocusFrame, Target, bounds};
 use gilrs::{Axis, Button, EventType, Gilrs};
 use icons::{Icon, icon_button};
 use std::collections::{HashMap, HashSet};
@@ -195,6 +197,14 @@ enum View {
     Error(String),
 }
 
+/// A small list opened from a toolbar dropdown so the controller can choose from it.
+#[derive(Clone, Copy, PartialEq)]
+enum Picker {
+    Sort,
+    Encoding,
+    Scale,
+}
+
 struct App {
     library: PathBuf,
     view: View,
@@ -215,7 +225,13 @@ struct App {
     /// True until the user moves the cursor: it then tracks the first game as the list re-sorts.
     focus_auto: bool,
     chooser_sel: usize,
-    columns: usize,
+    /// Set when focus is on a toolbar or details-page control instead of a game tile.
+    control_focus: Option<Control>,
+    /// Where everything focusable was on the last frame; D-pad moves use it.
+    nav_items: Vec<(Target, egui::Rect)>,
+    /// A control the controller pressed with A, consumed by that control next frame.
+    activate: Option<Control>,
+    picker: Option<Picker>,
     scroll_to_focus: bool,
     settings: Settings,
     settings_path: Option<PathBuf>,
@@ -262,7 +278,10 @@ impl App {
             focus_id: None,
             focus_auto: true,
             chooser_sel: 0,
-            columns: 1,
+            control_focus: None,
+            nav_items: Vec::new(),
+            activate: None,
+            picker: None,
             scroll_to_focus: false,
             settings: startup.settings,
             settings_path: startup.settings_path,
@@ -492,7 +511,7 @@ impl App {
     }
 
     fn context(&self) -> Context {
-        if self.chooser.is_some() {
+        if self.chooser.is_some() || self.picker.is_some() {
             Context::Chooser
         } else if matches!(self.screen, Screen::Details(_)) {
             Context::Details
@@ -539,8 +558,89 @@ impl App {
         self.save_settings();
     }
 
-    fn cycle_ui_scale(&mut self) {
-        self.set_ui_scale(window::next_scale(self.scale));
+    /// Opens the details page for a game; focus starts on its Launch button.
+    fn open_details_page(&mut self, id: String) {
+        self.screen = Screen::Details(id);
+        self.control_focus = Some(Control::Launch);
+    }
+
+    /// Back to the library; focus returns to the game that was selected.
+    fn close_details_page(&mut self) {
+        self.screen = Screen::Grid;
+        self.control_focus = None;
+        self.scroll_to_focus = true;
+    }
+
+    /// The title, the labels and the current choice of a toolbar dropdown.
+    fn picker_options(&self, picker: Picker) -> (&'static str, Vec<String>, usize) {
+        match picker {
+            Picker::Sort => {
+                let all = [Sort::LastPlayed, Sort::Title, Sort::DateAdded];
+                let labels = all.iter().map(|s| sort_label(*s).to_owned()).collect();
+                let at = all.iter().position(|s| *s == self.query.sort).unwrap_or(0);
+                ("Sort", labels, at)
+            }
+            Picker::Encoding => {
+                let all = [Encoding::Auto, Encoding::Cp932, Encoding::Utf8];
+                let labels = all.iter().map(|e| encoding_label(*e).to_owned()).collect();
+                let at = all.iter().position(|e| *e == self.encoding).unwrap_or(0);
+                ("Zip encoding", labels, at)
+            }
+            Picker::Scale => {
+                let labels = window::SCALE_PRESETS
+                    .iter()
+                    .map(|p| format!("{p:.2}"))
+                    .collect();
+                let at = window::SCALE_PRESETS
+                    .iter()
+                    .position(|p| (self.scale - p).abs() < 1e-3)
+                    .unwrap_or(0);
+                ("UI scale", labels, at)
+            }
+        }
+    }
+
+    fn open_picker(&mut self, picker: Picker) {
+        self.chooser_sel = self.picker_options(picker).2;
+        self.picker = Some(picker);
+    }
+
+    fn pick(&mut self, picker: Picker, index: usize) {
+        match picker {
+            Picker::Sort => {
+                if let Some(sort) = [Sort::LastPlayed, Sort::Title, Sort::DateAdded].get(index) {
+                    self.query.sort = *sort;
+                }
+            }
+            Picker::Encoding => {
+                if let Some(e) = [Encoding::Auto, Encoding::Cp932, Encoding::Utf8].get(index) {
+                    self.encoding = *e;
+                }
+            }
+            Picker::Scale => {
+                if let Some(scale) = window::SCALE_PRESETS.get(index) {
+                    self.set_ui_scale(*scale);
+                }
+            }
+        }
+    }
+
+    /// Keeps controller focus on something that exists on the current screen.
+    fn normalize_control_focus(&mut self) {
+        let on_screen = |c: Control, items: &[(Target, egui::Rect)]| {
+            items.iter().any(|(t, _)| *t == Target::Control(c))
+        };
+        match (&self.screen, self.control_focus) {
+            // `nav_items` is still the previous screen's layout until the details page has
+            // been drawn once (its Back button is the first thing it registers).
+            (Screen::Details(_), _) if !on_screen(Control::Back, &self.nav_items) => {}
+            // The details page always has focus on one of its controls.
+            (Screen::Details(_), Some(c)) if on_screen(c, &self.nav_items) => {}
+            (Screen::Details(_), _) => self.control_focus = Some(Control::Back),
+            // In the library, focus on a control that is gone goes back to the games.
+            (Screen::Grid, Some(c)) if !on_screen(c, &self.nav_items) => self.control_focus = None,
+            _ => {}
+        }
     }
 
     fn open_chooser(&mut self, index: usize) {
@@ -548,24 +648,20 @@ impl App {
         self.chooser_sel = 0;
     }
 
-    fn apply(&mut self, command: Command, visible: &[usize]) {
+    fn apply(&mut self, command: Command) {
         match command {
-            Command::Move(dir) => {
-                let View::Games(entries) = &self.view else {
-                    return;
-                };
-                let at = visible
-                    .iter()
-                    .position(|&i| Some(&entries[i].game.id) == self.focus_id.as_ref())
-                    .unwrap_or(0);
-                let to = nav::move_focus(at, visible.len(), self.columns, dir);
-                if let Some(&i) = visible.get(to) {
-                    self.focus_id = Some(entries[i].game.id.clone());
-                    self.focus_auto = false;
-                    self.scroll_to_focus = true;
-                }
-            }
+            Command::Move(dir) => self.move_focus(dir),
             Command::Primary => {
+                // A control with focus is pressed; the library's dropdowns open a list.
+                if let Some(control) = self.control_focus {
+                    match control {
+                        Control::Sort => self.open_picker(Picker::Sort),
+                        Control::Encoding => self.open_picker(Picker::Encoding),
+                        Control::Scale => self.open_picker(Picker::Scale),
+                        other => self.activate = Some(other),
+                    }
+                    return;
+                }
                 let Some(i) = self.target_index() else { return };
                 let View::Games(entries) = &self.view else {
                     return;
@@ -584,6 +680,10 @@ impl App {
                 }
             }
             Command::Reload => {
+                // In the library, X acts on the focused game, not on a toolbar control.
+                if matches!(self.screen, Screen::Grid) && self.control_focus.is_some() {
+                    return;
+                }
                 if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view) {
                     let game = entries[i].game.clone();
                     // While a game is extracting, this button cancels that instead.
@@ -595,37 +695,18 @@ impl App {
                 }
             }
             Command::OpenDetails => {
-                if let Some(id) = self.focus_id.clone() {
-                    self.screen = Screen::Details(id);
+                if self.control_focus.is_none()
+                    && let Some(id) = self.focus_id.clone()
+                {
+                    self.open_details_page(id);
                 }
             }
-            Command::Back => self.screen = Screen::Grid,
+            Command::Back => self.close_details_page(),
             Command::ToggleFavorite => {
                 if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view) {
                     let id = entries[i].game.id.clone();
                     self.toggle_favorite(&id);
                 }
-            }
-            Command::ChooseExe => {
-                if let Some(i) = self.target_index() {
-                    self.open_chooser(i);
-                }
-            }
-            Command::ReExtract => {
-                if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view)
-                    && matches!(entries[i].extract, Ok(Status::Ready { has_zip: true }))
-                {
-                    let dir = entries[i].game.dir.clone();
-                    self.extract_game(&dir);
-                }
-            }
-            Command::CycleSort(delta) => {
-                let all = [Sort::LastPlayed, Sort::Title, Sort::DateAdded];
-                self.query.sort = cycled(&all, self.query.sort, delta);
-            }
-            Command::CycleEncoding(delta) => {
-                let all = [Encoding::Auto, Encoding::Cp932, Encoding::Utf8];
-                self.encoding = cycled(&all, self.encoding, delta);
             }
             Command::Rescan => self.rescan(),
             Command::ToggleFavoritesOnly => self.query.favorites_only = !self.query.favorites_only,
@@ -634,18 +715,25 @@ impl App {
                 self.query.favorites_only = false;
             }
             Command::ChooserMove(delta) => {
-                let View::Games(entries) = &self.view else {
-                    return;
+                let len = match self.picker {
+                    Some(picker) => self.picker_options(picker).1.len(),
+                    None => match &self.view {
+                        View::Games(entries) => self
+                            .chooser
+                            .and_then(|i| entries.get(i))
+                            .map_or(0, |e| e.candidates.len()),
+                        _ => 0,
+                    },
                 };
-                let len = self
-                    .chooser
-                    .and_then(|i| entries.get(i))
-                    .map_or(0, |e| e.candidates.len());
                 let last = len.saturating_sub(1) as i64;
                 self.chooser_sel =
                     (self.chooser_sel as i64 + i64::from(delta)).clamp(0, last) as usize;
             }
             Command::ChooserPick => {
+                if let Some(picker) = self.picker.take() {
+                    self.pick(picker, self.chooser_sel);
+                    return;
+                }
                 let View::Games(entries) = &self.view else {
                     return;
                 };
@@ -662,10 +750,35 @@ impl App {
                     }
                 }
             }
-            Command::ChooserCancel => self.chooser = None,
+            Command::ChooserCancel => {
+                self.chooser = None;
+                self.picker = None;
+            }
             Command::ToggleFullscreen => self.toggle_fullscreen(),
-            Command::CycleUiScale => self.cycle_ui_scale(),
             Command::ToggleBlur => self.toggle_blur(),
+        }
+    }
+
+    /// Moves focus to the nearest control or tile in `dir`, using where things were drawn.
+    fn move_focus(&mut self, dir: nav::Dir) {
+        let current = match (&self.control_focus, &self.focus_id) {
+            (Some(c), _) => Target::Control(*c),
+            (None, Some(id)) => Target::Game(id.clone()),
+            (None, None) => return,
+        };
+        let Some(from) = self.nav_items.iter().position(|(t, _)| *t == current) else {
+            return;
+        };
+        let rects: Vec<nav::Bounds> = self.nav_items.iter().map(|(_, r)| bounds(*r)).collect();
+        let to = nav::spatial_next(&rects, from, dir);
+        match self.nav_items[to].0.clone() {
+            Target::Game(id) => {
+                self.focus_id = Some(id);
+                self.control_focus = None;
+                self.focus_auto = false;
+                self.scroll_to_focus = true;
+            }
+            Target::Control(control) => self.control_focus = Some(control),
         }
     }
 
@@ -762,12 +875,14 @@ impl eframe::App for App {
         self.normalize_focus(&visible);
         for input in inputs {
             if let Some(command) = nav::command(self.context(), input) {
-                self.apply(command, &visible);
+                self.apply(command);
             }
         }
         // Commands can rescan or re-sort; make sure the cursor is still on a visible game.
         let visible = self.visible();
         self.normalize_focus(&visible);
+        self.normalize_control_focus();
+        let mut frame = FocusFrame::new(self.control_focus, self.activate.take());
         // Apply a requested zoom; otherwise notice egui's own Ctrl +/- zoom and remember it.
         if let Some(zoom) = self.zoom_request.take() {
             ctx.set_zoom_factor(zoom);
@@ -780,6 +895,8 @@ impl eframe::App for App {
         let mut create = false;
         let mut choice = None;
         let mut close_chooser = false;
+        let mut picker_pick: Option<(Picker, usize)> = None;
+        let mut picker_cancel = false;
         let mut launch = None;
         let mut clicked_focus: Option<String> = None;
         let mut cancel_ids: Vec<String> = Vec::new();
@@ -799,13 +916,20 @@ impl eframe::App for App {
         let mut blur_on = self.settings.blur_covers;
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
-                if ui.button("Rescan").clicked() {
+                let response = ui.button("Rescan");
+                if frame.pressed(ui, Control::Rescan, &response, true) {
                     rescan = true;
                 }
-                fullscreen_click = ui.button("Fullscreen").clicked();
-                ui.toggle_value(&mut blur_on, "Blur")
+                let response = ui.button("Fullscreen");
+                fullscreen_click = frame.pressed(ui, Control::Fullscreen, &response, true);
+                let response = ui
+                    .toggle_value(&mut blur_on, "Blur")
                     .on_hover_text("Blur all images (key: B)");
-                egui::ComboBox::from_id_salt("ui-scale")
+                frame.register(ui, Control::Blur, &response);
+                if frame.activated(Control::Blur) {
+                    blur_on = !blur_on;
+                }
+                let response = egui::ComboBox::from_id_salt("ui-scale")
                     .selected_text(format!("UI x{current_scale:.2}"))
                     .show_ui(ui, |ui| {
                         for preset in window::SCALE_PRESETS {
@@ -814,8 +938,10 @@ impl eframe::App for App {
                                 picked_scale = Some(preset);
                             }
                         }
-                    });
-                egui::ComboBox::from_id_salt("zip-encoding")
+                    })
+                    .response;
+                frame.register(ui, Control::Scale, &response);
+                let response = egui::ComboBox::from_id_salt("zip-encoding")
                     .selected_text(encoding_label(self.encoding))
                     .show_ui(ui, |ui| {
                         for choice in [Encoding::Auto, Encoding::Cp932, Encoding::Utf8] {
@@ -824,11 +950,12 @@ impl eframe::App for App {
                     })
                     .response
                     .on_hover_text(ZIP_ENCODING_HELP);
+                frame.register(ui, Control::Encoding, &response);
                 ui.label(self.library.display().to_string());
             });
             if matches!(self.screen, Screen::Grid) {
                 ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt("sort")
+                    let response = egui::ComboBox::from_id_salt("sort")
                         .selected_text(sort_label(self.query.sort))
                         .show_ui(ui, |ui| {
                             for sort in [Sort::LastPlayed, Sort::Title, Sort::DateAdded] {
@@ -837,9 +964,14 @@ impl eframe::App for App {
                         })
                         .response
                         .on_hover_text(SORT_HELP);
+                    frame.register(ui, Control::Sort, &response);
                     ui.label("Search");
                     ui.text_edit_singleline(&mut self.query.text);
-                    ui.checkbox(&mut self.query.favorites_only, "Favorites only");
+                    let response = ui.checkbox(&mut self.query.favorites_only, "Favorites only");
+                    frame.register(ui, Control::FavoritesOnly, &response);
+                    if frame.activated(Control::FavoritesOnly) {
+                        self.query.favorites_only = !self.query.favorites_only;
+                    }
                 });
             }
             if let Some(message) = &self.message {
@@ -860,12 +992,12 @@ impl eframe::App for App {
 
         let hint = match self.context() {
             Context::Grid => {
-                "A Launch   B Reset filters   X Reload/Cancel extract   Y Details   LB/RB Sort   LT/RT Zip encoding   Select Favorites only   Start Rescan   R3/F11 Fullscreen   L3 UI scale"
+                "D-pad Move   A Open / Press   B Reset filters   X Reload / Cancel extract   Y Details   Start Rescan   Select Favorites only"
             }
             Context::Details => {
-                "A Launch   B Back   X Reload/Cancel extract   Y Favorite   LB Choose exe   RB Re-extract   Start Rescan   R3/F11 Fullscreen   L3 UI scale"
+                "D-pad Move   A Press   B Back   X Reload / Cancel extract   Y Favorite   Start Rescan"
             }
-            Context::Chooser => "Up/Down Select   A Pick   B Cancel   R3/F11 Fullscreen",
+            Context::Chooser => "Up/Down Select   A Pick   B Cancel",
         };
         egui::Panel::bottom("hints").show(ui, |ui| {
             ui.weak(hint);
@@ -910,7 +1042,7 @@ impl eframe::App for App {
                     running: self.launcher.is_running(&entry.game.dir),
                     extracting: self.extracting.get(id).map(ExtractJob::progress),
                 };
-                let action = details_ui(ui, &view);
+                let action = details_ui(ui, &view, &mut frame);
                 back = action.back;
                 if action.reload {
                     details_reload = Some(entry.game.clone());
@@ -947,7 +1079,6 @@ impl eframe::App for App {
                         let columns = ((ui.available_width() + spacing) / (CELL_WIDTH + spacing))
                             .floor()
                             .max(1.0) as usize;
-                        self.columns = columns;
                         for row in order.chunks(columns) {
                             ui.horizontal_top(|ui| {
                                 for &i in row {
@@ -972,11 +1103,15 @@ impl eframe::App for App {
                                             .extracting
                                             .get(&entry.game.id)
                                             .map(ExtractJob::progress),
-                                        focused: self.focus_id.as_ref() == Some(&entry.game.id),
+                                        focused: self.control_focus.is_none()
+                                            && self.focus_id.as_ref() == Some(&entry.game.id),
                                         cover_file,
                                         cover_view,
                                     };
                                     let action = tile_ui(ui, &tile);
+                                    frame
+                                        .items
+                                        .push((Target::Game(entry.game.id.clone()), action.rect));
                                     if tile.focused && self.scroll_to_focus {
                                         ui.scroll_to_rect(action.rect.expand(8.0), None);
                                     }
@@ -1025,7 +1160,7 @@ impl eframe::App for App {
                         ui.label("No exe found in this folder.");
                     }
                     if let Some(candidate) =
-                        exe_choices(ui, &entry.candidates, Some(self.chooser_sel))
+                        exe_choices(ui, &entry.candidates, Some(self.chooser_sel), None)
                     {
                         choice = Some((entry.game.dir.clone(), candidate));
                     }
@@ -1035,9 +1170,58 @@ impl eframe::App for App {
                 });
         }
 
+        if let Some(picker) = self.picker {
+            let (title, labels, _) = self.picker_options(picker);
+            // No title bar: its width is computed separately from the content and would not
+            // match the entries. The title is a heading inside the box instead.
+            egui::Window::new(title)
+                .title_bar(false)
+                .resizable(false)
+                .auto_sized()
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    let measure = |ui: &egui::Ui, text: &str, style: egui::TextStyle| {
+                        let font = style.resolve(ui.style());
+                        ui.painter()
+                            .layout_no_wrap(text.to_owned(), font, egui::Color32::WHITE)
+                            .size()
+                            .x
+                    };
+                    let items = labels
+                        .iter()
+                        .map(String::as_str)
+                        .chain(["Cancel"])
+                        .map(|text| measure(ui, text, egui::TextStyle::Button))
+                        .fold(0.0, f32::max)
+                        + 2.0 * ui.spacing().button_padding.x;
+                    ui.set_width(items.max(measure(ui, title, egui::TextStyle::Heading)));
+                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                        ui.heading(title);
+                        ui.separator();
+                        for (i, label) in labels.iter().enumerate() {
+                            if ui.selectable_label(i == self.chooser_sel, label).clicked() {
+                                picker_pick = Some((picker, i));
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            picker_cancel = true;
+                        }
+                    });
+                });
+        }
+
+        self.nav_items = std::mem::take(&mut frame.items);
         self.scroll_to_focus = false;
+        if let Some((picker, index)) = picker_pick {
+            self.picker = None;
+            self.pick(picker, index);
+        }
+        if picker_cancel {
+            self.picker = None;
+        }
         if let Some(id) = clicked_focus {
             self.focus_id = Some(id);
+            self.control_focus = None;
             self.focus_auto = false;
         }
         for id in cancel_ids {
@@ -1050,10 +1234,10 @@ impl eframe::App for App {
             self.chooser = None;
         }
         if let Some(id) = open_details {
-            self.screen = Screen::Details(id);
+            self.open_details_page(id);
         }
         if back {
-            self.screen = Screen::Grid;
+            self.close_details_page();
         }
         if let Some(id) = favorite_id {
             self.toggle_favorite(&id);
@@ -1300,7 +1484,7 @@ const KEYBOARD: &[(egui::Key, Input)] = &[
     (egui::Key::R, Input::X),
     (egui::Key::D, Input::Y),
     (egui::Key::F5, Input::Start),
-    (egui::Key::F11, Input::RightStickClick),
+    (egui::Key::F11, Input::ToggleFullscreen),
     (egui::Key::B, Input::ToggleBlur),
 ];
 
@@ -1314,14 +1498,8 @@ fn pad_input(button: Button) -> Option<Input> {
         Button::East => Input::B,
         Button::West => Input::X,
         Button::North => Input::Y,
-        Button::LeftTrigger => Input::LeftBumper,
-        Button::RightTrigger => Input::RightBumper,
-        Button::LeftTrigger2 => Input::LeftTrigger,
-        Button::RightTrigger2 => Input::RightTrigger,
         Button::Start => Input::Start,
         Button::Select => Input::Select,
-        Button::LeftThumb => Input::LeftStickClick,
-        Button::RightThumb => Input::RightStickClick,
         _ => return None,
     })
 }
@@ -1333,10 +1511,4 @@ fn dir_input(dir: nav::Dir) -> Input {
         nav::Dir::Left => Input::Left,
         nav::Dir::Right => Input::Right,
     }
-}
-
-/// The item `delta` steps from `current` in `all`, wrapping around.
-fn cycled<T: Copy + PartialEq>(all: &[T], current: T, delta: i32) -> T {
-    let at = all.iter().position(|&x| x == current).unwrap_or(0) as i32;
-    all[(at + delta).rem_euclid(all.len() as i32) as usize]
 }
