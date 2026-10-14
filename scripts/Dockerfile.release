@@ -1,0 +1,6 @@
+# Build environment for the release binary: Debian 12 (glibc 2.36), so the result also
+# runs on SteamOS and other systems whose glibc is older than a current Arch's.
+FROM rust:1-bookworm
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libudev-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*

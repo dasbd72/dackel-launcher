@@ -1,0 +1,57 @@
+# Release build and cross-machine check
+
+## Build
+
+```sh
+scripts/build-release.sh
+```
+
+This builds inside a Debian 12 container (glibc 2.36) and writes `dist/dlsite-launcher`.
+Building on Arch directly would need Arch's newest glibc, which SteamOS does not have.
+The script prints the highest glibc version the binary asks for; it should be 2.36 or less.
+
+Copy the binary next to the library folder on the drive:
+
+```
+DLSite/
+  dlsite-launcher
+  DLSiteLibrary/RJ.../
+```
+
+It looks for `DLSiteLibrary/` beside itself, so the drive can be mounted anywhere.
+`--library /some/path` uses another folder for one run.
+
+## What the Deck needs
+
+- `umu-run` on the `PATH` (umu-launcher), and a GE-Proton under
+  `~/.local/share/Steam/compatibilitytools.d/` (or `~/.config/dlsite-launcher/proton-path`
+  / `$PROTONPATH` pointing at one).
+- A font with Japanese glyphs (SteamOS ships one).
+
+## Steam Input
+
+Add the binary to Steam as a non-Steam game. Under Controller settings use a **Gamepad**
+layout (or turn Steam Input off for it). The desktop layout turns the sticks into arrow
+keys, so the launcher never sees a stick and each press can arrive twice. If a D-pad press
+still moves twice, raise **Debounce** in the toolbar.
+
+## Checklist
+
+Tick each on the **desktop** and on the **Deck**.
+
+| Check | Desktop | Deck |
+| --- | --- | --- |
+| The same `dist/dlsite-launcher` file starts (no `GLIBC_...` or missing-library error) | [ ] | [ ] |
+| Games from `DLSiteLibrary/` appear, covers and Japanese titles render | [ ] | [ ] |
+| Starts fullscreen on the Deck / windowed on the desktop (Fullscreen button and F11 toggle it) | [ ] | [ ] |
+| D-pad moves focus over the toolbar, tiles and details buttons; A presses; B backs out | [ ] | [ ] |
+| Left stick scrolls the details page; the page follows focus | [ ] | [ ] |
+| The Sort, UI scale, Debounce and Zip encoding popups open and pick by controller | [ ] | [ ] |
+| One D-pad press moves focus once (Steam Input) | [ ] | [ ] |
+| Extract a zip: progress shows, Cancel works | [ ] | [ ] |
+| **A real game launches from the gamepad and plays**; play time is saved on exit | [ ] | [ ] |
+| Launcher comes back after the game exits (window restore) | [ ] | [ ] |
+| Mount the drive somewhere else (or copy the folder elsewhere): it still finds `DLSiteLibrary/` | [ ] | [ ] |
+| The first launch pins the Proton version (details page > Launch options) | [ ] | [ ] |
+| A game pinned on one machine shows the "Proton version missing" prompt on the other if its version is not installed | [ ] | [ ] |
+| Libraries window: add a second folder; its games show with the library filter | [ ] | [ ] |
