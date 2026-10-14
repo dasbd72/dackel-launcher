@@ -57,6 +57,18 @@ fn main() -> eframe::Result {
             cc.egui_ctx.global_style_mut(|style| {
                 style.spacing.button_padding = egui::vec2(12.0, 7.0);
                 style.spacing.interact_size.y = icons::BUTTON_HEIGHT;
+                // Larger text to match the large buttons. The Button style is left alone, so
+                // buttons keep their size.
+                for (text_style, size) in [
+                    (egui::TextStyle::Small, 13.0),
+                    (egui::TextStyle::Body, 17.0),
+                    (egui::TextStyle::Monospace, 16.0),
+                    (egui::TextStyle::Heading, 24.0),
+                ] {
+                    style
+                        .text_styles
+                        .insert(text_style, egui::FontId::proportional(size));
+                }
             });
             install_japanese_font(&cc.egui_ctx);
             cc.egui_ctx.set_zoom_factor(startup.scale);
@@ -1019,7 +1031,7 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
                 // Reserve two title lines so the button rows line up across a grid row.
                 ui.vertical(|ui| {
                     ui.set_min_height(2.0 * ui.text_style_height(&egui::TextStyle::Body));
-                    ui.add(egui::Label::new(egui::RichText::new(title).strong()).wrap());
+                    ui.add(egui::Label::new(two_line_title(ui, title)));
                 });
                 if tile.running {
                     ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
@@ -1081,6 +1093,26 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
         );
     }
     action
+}
+
+/// A tile title that wraps to at most two lines and ends in an ellipsis, so a long title
+/// cannot push the buttons down.
+fn two_line_title(ui: &egui::Ui, title: &str) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::single_section(
+        title.to_owned(),
+        egui::TextFormat {
+            font_id: egui::TextStyle::Body.resolve(ui.style()),
+            color: ui.visuals().strong_text_color(),
+            ..Default::default()
+        },
+    );
+    job.wrap = egui::text::TextWrapping {
+        max_rows: 2,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+        ..Default::default()
+    };
+    job
 }
 
 fn encoding_label(encoding: Encoding) -> &'static str {
