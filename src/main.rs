@@ -1460,7 +1460,6 @@ impl eframe::App for App {
                     .response
                     .on_hover_text(ZIP_ENCODING_HELP);
                 frame.register(ui, Control::Encoding, &response);
-                ui.label(self.library.display().to_string());
             });
             if matches!(self.screen, Screen::Grid) {
                 ui.horizontal(|ui| {
