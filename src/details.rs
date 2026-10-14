@@ -7,8 +7,10 @@ use dlsite_launcher::browse::format_play_time;
 use dlsite_launcher::extract::{Progress, Status};
 use dlsite_launcher::info::GameInfo;
 use dlsite_launcher::nav::Control;
-use dlsite_launcher::profile::Stats;
+use dlsite_launcher::profile::{self, Stats};
+use dlsite_launcher::tuning::{format_env, parse_env, split_args, winetricks_command};
 use eframe::egui;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const COVER_WIDTH: f32 = 420.0;
@@ -24,6 +26,29 @@ fn row_label(ui: &mut egui::Ui, text: &str, pad_top: f32) {
                 .wrap_mode(egui::TextWrapMode::Extend),
         );
     });
+}
+
+/// The "Launch options" form of the open details page: what is typed, before it is saved.
+pub struct TuningEdit {
+    /// `Game::key` of the game the text belongs to.
+    pub key: String,
+    env_text: String,
+    args: String,
+    error: Option<String>,
+    confirm_reset: bool,
+}
+
+impl TuningEdit {
+    pub fn load(key: String, game_dir: &Path) -> Self {
+        let tuning = profile::read_tuning(game_dir).unwrap_or_default();
+        TuningEdit {
+            key,
+            env_text: format_env(&tuning.env),
+            args: tuning.args,
+            error: None,
+            confirm_reset: false,
+        }
+    }
 }
 
 pub struct DetailsView<'a> {
@@ -42,6 +67,10 @@ pub struct DetailsView<'a> {
     pub running: bool,
     /// Set while this game is being extracted in the background.
     pub extracting: Option<Progress>,
+    /// The game's folder, for the winetricks command.
+    pub dir: &'a Path,
+    /// The Proton version pinned on the first launch.
+    pub proton_pin: Option<&'a str>,
 }
 
 #[derive(Default)]
@@ -53,6 +82,10 @@ pub struct DetailsAction {
     pub toggle_favorite: bool,
     pub launch: bool,
     pub choose_exe: Option<PathBuf>,
+    /// Env and arguments to save.
+    pub save_tuning: Option<(BTreeMap<String, String>, String)>,
+    pub unpin_proton: bool,
+    pub reset_prefix: bool,
 }
 
 /// Lists exe candidates as buttons; returns the one clicked, if any.
@@ -80,7 +113,12 @@ pub fn exe_choices(
     chosen
 }
 
-pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView, frame: &mut FocusFrame) -> DetailsAction {
+pub fn details_ui(
+    ui: &mut egui::Ui,
+    view: &DetailsView,
+    frame: &mut FocusFrame,
+    edit: &mut TuningEdit,
+) -> DetailsAction {
     let mut action = DetailsAction::default();
     let title = view.info.map_or(view.id, |info| info.title.as_str());
 
@@ -273,6 +311,7 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView, frame: &mut FocusFrame)
             if let Some(err) = view.error {
                 ui.colored_label(egui::Color32::LIGHT_RED, err);
             }
+            launch_options(ui, view, edit, &mut action);
         });
     });
 
@@ -301,4 +340,96 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView, frame: &mut FocusFrame)
         }
     }
     action
+}
+
+/// Per-game env and arguments, the pinned Proton, the winetricks command and Prefix reset.
+fn launch_options(
+    ui: &mut egui::Ui,
+    view: &DetailsView,
+    edit: &mut TuningEdit,
+    action: &mut DetailsAction,
+) {
+    egui::CollapsingHeader::new("Launch options").show(ui, |ui| {
+        ui.weak("Environment variables, one KEY=value per line");
+        ui.add(
+            egui::TextEdit::multiline(&mut edit.env_text)
+                .font(egui::TextStyle::Monospace)
+                .desired_rows(3)
+                .desired_width(f32::INFINITY),
+        );
+        ui.weak("Extra arguments");
+        ui.add(egui::TextEdit::singleline(&mut edit.args).desired_width(f32::INFINITY));
+        ui.horizontal(|ui| {
+            if ui.button("Save").clicked() {
+                let checked = parse_env(&edit.env_text).and_then(|env| {
+                    if env.contains_key("WINEPREFIX") {
+                        return Err(
+                            "WINEPREFIX is managed by the launcher (see Reset prefix)".to_owned()
+                        );
+                    }
+                    split_args(&edit.args).map_err(|e| format!("Extra arguments: {e}"))?;
+                    Ok(env)
+                });
+                match checked {
+                    Ok(env) => {
+                        edit.error = None;
+                        action.save_tuning = Some((env, edit.args.clone()));
+                    }
+                    Err(err) => edit.error = Some(err),
+                }
+            }
+            if let Some(err) = &edit.error {
+                ui.colored_label(egui::Color32::LIGHT_RED, err);
+            }
+        });
+
+        ui.separator();
+        ui.horizontal(|ui| match view.proton_pin {
+            Some(pin) => {
+                ui.label(format!("Proton pinned to {pin}"));
+                if ui.button("Unpin").clicked() {
+                    action.unpin_proton = true;
+                }
+            }
+            None => {
+                ui.weak("Proton: pinned on the first launch");
+            }
+        });
+
+        ui.separator();
+        ui.weak("Winetricks for this game's prefix");
+        let command = winetricks_command(view.dir);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(&command).monospace());
+            if ui.button("Copy").clicked() {
+                ui.ctx().copy_text(command.clone());
+            }
+        });
+
+        ui.separator();
+        if edit.confirm_reset {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                "Delete this game's Wine prefix? Anything stored inside it, such as installed \
+                 components or saves, is lost. The game's own files are kept.",
+            );
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(!view.running, egui::Button::new("Delete prefix"))
+                    .clicked()
+                {
+                    action.reset_prefix = true;
+                    edit.confirm_reset = false;
+                }
+                if ui.button("Keep it").clicked() {
+                    edit.confirm_reset = false;
+                }
+            });
+            if view.running {
+                ui.weak("Close the game first.");
+            }
+        } else if ui.button("Reset prefix...").clicked() {
+            edit.confirm_reset = true;
+        }
+    });
 }

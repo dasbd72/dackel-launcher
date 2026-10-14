@@ -4,7 +4,7 @@ mod focus;
 mod icons;
 
 use covers::{BlurCache, CoverView};
-use details::{DetailsView, details_ui, exe_choices};
+use details::{DetailsView, TuningEdit, details_ui, exe_choices};
 use dlsite_launcher::browse::{self, Card, Query, Sort};
 use dlsite_launcher::extract::{self, Encoding, Progress, Status};
 use dlsite_launcher::fetch::HttpFetch;
@@ -18,9 +18,10 @@ use dlsite_launcher::nav::{
     Repeater,
 };
 use dlsite_launcher::profile::{self, ExeState, Stats};
-use dlsite_launcher::proton;
+use dlsite_launcher::proton::{self, ProtonChoice};
 use dlsite_launcher::reload::Reloads;
 use dlsite_launcher::settings::{self, Settings};
+use dlsite_launcher::tuning::reset_prefix;
 use dlsite_launcher::window::{self, Restore, RestoreStep};
 use eframe::egui;
 use focus::{FocusFrame, Item, Target, bounds};
@@ -224,6 +225,22 @@ struct PickerList {
     current: usize,
 }
 
+/// A launch waiting for the user to decide what to do about a missing Proton version.
+#[derive(Clone)]
+enum PromptOption {
+    Newest,
+    Another,
+    Version(PathBuf),
+}
+
+struct ProtonPrompt {
+    dir: PathBuf,
+    pinned: String,
+    newest: Option<PathBuf>,
+    /// Showing the list of installed versions to pick from.
+    choosing: bool,
+}
+
 struct App {
     /// The library beside the binary (or `--library`); always first in `libraries`.
     library: PathBuf,
@@ -234,6 +251,10 @@ struct App {
     /// Show only games from this library.
     library_filter: Option<PathBuf>,
     libraries_open: bool,
+    /// Shown when a game's pinned Proton is not installed on this machine.
+    proton_prompt: Option<ProtonPrompt>,
+    /// The details page's Launch options form.
+    tuning_edit: Option<TuningEdit>,
     library_input: String,
     library_error: Option<String>,
     view: View,
@@ -294,6 +315,8 @@ impl App {
             offline: Vec::new(),
             library_filter: None,
             libraries_open: false,
+            proton_prompt: None,
+            tuning_edit: None,
             library_input: String::new(),
             library_error: None,
             view: View::Missing,
@@ -525,29 +548,120 @@ impl App {
         let Some(entry) = entries.get(index) else {
             return;
         };
+        if entry.state.is_err() {
+            return;
+        }
+        let dir = entry.game.dir.clone();
+        let pinned = profile::read_tuning(&dir).ok().and_then(|t| t.proton);
+        match proton::resolve_for_game_default(pinned.as_deref()) {
+            Err(err) => self.message = Some(format!("Launch failed: {err}")),
+            Ok(ProtonChoice::Use(path)) => {
+                self.start_game(&dir, path.as_deref());
+            }
+            Ok(ProtonChoice::Mismatch { pinned, newest }) => {
+                self.list_sel = 0;
+                self.proton_prompt = Some(ProtonPrompt {
+                    dir,
+                    pinned,
+                    newest,
+                    choosing: false,
+                });
+            }
+        }
+    }
+
+    /// Spawns the game with the given Proton (`None`: umu's own choice).
+    fn start_game(&mut self, dir: &Path, proton: Option<&Path>) -> bool {
+        let View::Games(entries) = &self.view else {
+            return false;
+        };
+        let Some(entry) = entries.iter().find(|e| e.game.dir == dir) else {
+            return false;
+        };
         let Ok(state) = &entry.state else {
+            return false;
+        };
+        match self
+            .launcher
+            .start(&entry.game.dir, state, proton, unix_now())
+        {
+            Ok(()) => {
+                if self.minimize_on_launch {
+                    // Hand the screen to the game; minimize rather than close.
+                    self.window_cmds
+                        .push(egui::ViewportCommand::Minimized(true));
+                    self.minimized_by_us = true;
+                }
+                self.message = Some(format!("Launched {}", entry.game.id));
+                true
+            }
+            Err(err) => {
+                self.message = Some(format!("Launch failed: {err}"));
+                false
+            }
+        }
+    }
+
+    /// The user's answer to the missing-Proton prompt: launch with `proton`, and once the
+    /// game has started, pin that version instead of the missing one.
+    fn launch_with_other_proton(&mut self, proton: Option<PathBuf>) {
+        let Some(prompt) = self.proton_prompt.take() else {
             return;
         };
-        self.message = Some(match proton::resolve_default() {
-            Err(err) => format!("Launch failed: {err}"),
-            Ok(proton) => {
-                match self
-                    .launcher
-                    .start(&entry.game.dir, state, proton.as_deref(), unix_now())
-                {
-                    Ok(()) => {
-                        if self.minimize_on_launch {
-                            // Hand the screen to the game; minimize rather than close.
-                            self.window_cmds
-                                .push(egui::ViewportCommand::Minimized(true));
-                            self.minimized_by_us = true;
-                        }
-                        format!("Launched {}", entry.game.id)
-                    }
-                    Err(err) => format!("Launch failed: {err}"),
-                }
+        if self.start_game(&prompt.dir, proton.as_deref()) {
+            let name = proton
+                .as_deref()
+                .and_then(Path::file_name)
+                .map(|n| n.to_string_lossy().into_owned());
+            if let Err(err) = profile::set_proton_pin(&prompt.dir, name.as_deref()) {
+                self.message = Some(format!("Launched, but the Proton pin was not saved: {err}"));
             }
-        });
+        }
+    }
+
+    /// The choices the missing-Proton prompt offers right now.
+    fn prompt_options(&self) -> Vec<(PromptOption, String)> {
+        let Some(prompt) = &self.proton_prompt else {
+            return Vec::new();
+        };
+        let name = |p: &Path| {
+            p.file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+        };
+        if prompt.choosing {
+            return proton::installed(&proton::compat_dir())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| {
+                    let label = name(&p);
+                    (PromptOption::Version(p), label)
+                })
+                .collect();
+        }
+        let newest = match &prompt.newest {
+            Some(path) => format!("Use newest anyway ({})", name(path)),
+            None => "Launch with umu's default anyway".to_owned(),
+        };
+        vec![
+            (PromptOption::Newest, newest),
+            (PromptOption::Another, "Pick another...".to_owned()),
+        ]
+    }
+
+    fn answer_prompt(&mut self, option: PromptOption) {
+        match option {
+            PromptOption::Newest => {
+                let newest = self.proton_prompt.as_ref().and_then(|p| p.newest.clone());
+                self.launch_with_other_proton(newest);
+            }
+            PromptOption::Another => {
+                if let Some(prompt) = &mut self.proton_prompt {
+                    prompt.choosing = true;
+                }
+                self.list_sel = 0;
+            }
+            PromptOption::Version(path) => self.launch_with_other_proton(Some(path)),
+        }
     }
 
     fn toggle_favorite(&mut self, id: &str) {
@@ -619,7 +733,11 @@ impl App {
     }
 
     fn context(&self) -> Context {
-        if self.chooser.is_some() || self.picker.is_some() || self.libraries_open {
+        if self.chooser.is_some()
+            || self.picker.is_some()
+            || self.libraries_open
+            || self.proton_prompt.is_some()
+        {
             Context::Chooser
         } else if matches!(self.screen, Screen::Details(_)) {
             Context::Details
@@ -659,6 +777,81 @@ impl App {
         self.settings.ui_scale = Some(scale);
         self.zoom_request = Some(scale);
         self.save_settings();
+    }
+
+    /// Saves the Launch options form, unpins Proton, or resets the prefix.
+    fn apply_tuning(&mut self, result: TuningResult) {
+        let TuningResult {
+            dir,
+            id,
+            save,
+            unpin,
+            reset_prefix: reset,
+        } = result;
+        if let Some((env, args)) = save {
+            self.message = Some(match profile::set_tuning(&dir, env, &args) {
+                Ok(()) => format!("Saved launch options for {id}"),
+                Err(err) => format!("Could not save launch options: {err}"),
+            });
+        }
+        if unpin {
+            self.message = Some(match profile::set_proton_pin(&dir, None) {
+                Ok(()) => format!("{id} will pin the Proton it launches with next"),
+                Err(err) => format!("Could not unpin Proton: {err}"),
+            });
+        }
+        if reset {
+            self.message = Some(if self.launcher.is_running(&dir) {
+                "Close the game before resetting its prefix".to_owned()
+            } else {
+                match reset_prefix(&dir) {
+                    Ok(()) => format!("Reset the Wine prefix of {id}"),
+                    Err(err) => format!("Could not reset the prefix: {err}"),
+                }
+            });
+        }
+    }
+
+    /// Asks what to do when a game's pinned Proton is not installed here.
+    fn proton_prompt_window(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = &self.proton_prompt else {
+            return;
+        };
+        let options = self.prompt_options();
+        let mut answer: Option<PromptOption> = None;
+        let mut cancel = false;
+        egui::Window::new("Proton version missing")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                let game = prompt
+                    .dir
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                ui.label(format!(
+                    "{game} was set up with {}, which is not installed on this machine.",
+                    prompt.pinned
+                ));
+                if options.is_empty() {
+                    ui.weak("No GE-Proton versions are installed.");
+                }
+                ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                    for (i, (option, label)) in options.iter().enumerate() {
+                        if ui.selectable_label(i == self.list_sel, label).clicked() {
+                            answer = Some(option.clone());
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if let Some(option) = answer {
+            self.answer_prompt(option);
+        } else if cancel {
+            self.proton_prompt = None;
+        }
     }
 
     /// The manager for the added libraries: list them, add a typed path, remove one.
@@ -968,6 +1161,7 @@ impl App {
             }
             Command::ChooserMove(delta) => {
                 let len = match self.picker {
+                    _ if self.proton_prompt.is_some() => self.prompt_options().len(),
                     Some(picker) => self.picker_list(picker).labels.len(),
                     None => match &self.view {
                         View::Games(entries) => self
@@ -981,6 +1175,13 @@ impl App {
                 self.list_sel = (self.list_sel as i64 + i64::from(delta)).clamp(0, last) as usize;
             }
             Command::ChooserPick => {
+                if self.proton_prompt.is_some() {
+                    if let Some((option, _)) = self.prompt_options().into_iter().nth(self.list_sel)
+                    {
+                        self.answer_prompt(option);
+                    }
+                    return;
+                }
                 if let Some(picker) = self.picker.take() {
                     self.pick(picker, self.list_sel);
                     return;
@@ -1002,6 +1203,7 @@ impl App {
                 self.chooser = None;
                 self.picker = None;
                 self.libraries_open = false;
+                self.proton_prompt = None;
             }
             Command::ToggleFullscreen => self.toggle_fullscreen(),
             Command::ToggleBlur => self.toggle_blur(),
@@ -1157,6 +1359,14 @@ impl eframe::App for App {
         let mut details_reload: Option<Game> = None;
         let mut details_extract: Option<PathBuf> = None;
         let mut details_choice: Option<(PathBuf, PathBuf)> = None;
+        let mut tuning_action: Option<TuningResult> = None;
+        // The pin is re-read each frame the page is open, so the first launch shows it at once.
+        let tuning_pin = match &self.screen {
+            Screen::Details(key) => profile::read_tuning(Path::new(key))
+                .ok()
+                .and_then(|t| t.proton),
+            Screen::Grid => None,
+        };
         self.collect_reloads();
         if !self.busy.is_empty() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
@@ -1347,8 +1557,23 @@ impl eframe::App for App {
                     busy: self.busy.contains(id),
                     running: self.launcher.is_running(&entry.game.dir),
                     extracting: self.extracting.get(id).map(ExtractJob::progress),
+                    dir: &entry.game.dir,
+                    proton_pin: tuning_pin.as_deref(),
                 };
-                let action = details_ui(ui, &view, &mut frame);
+                if self.tuning_edit.as_ref().is_none_or(|e| e.key != *id) {
+                    self.tuning_edit = Some(TuningEdit::load(id.clone(), &entry.game.dir));
+                }
+                let Some(edit) = self.tuning_edit.as_mut() else {
+                    return;
+                };
+                let action = details_ui(ui, &view, &mut frame, edit);
+                tuning_action = Some(TuningResult {
+                    dir: entry.game.dir.clone(),
+                    id: entry.game.id.clone(),
+                    save: action.save_tuning,
+                    unpin: action.unpin_proton,
+                    reset_prefix: action.reset_prefix,
+                });
                 back = action.back;
                 if action.reload {
                     details_reload = Some(entry.game.clone());
@@ -1488,6 +1713,12 @@ impl eframe::App for App {
 
         if self.libraries_open {
             self.libraries_window(ui.ctx());
+        }
+        if self.proton_prompt.is_some() {
+            self.proton_prompt_window(ui.ctx());
+        }
+        if let Some(result) = tuning_action {
+            self.apply_tuning(result);
         }
 
         self.nav_items = std::mem::take(&mut frame.items);
@@ -1853,4 +2084,13 @@ fn file_name_of(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
         .map_or_else(|| path.to_owned(), |n| n.to_string_lossy().into_owned())
+}
+
+/// What the details page's Launch options asked for in one frame.
+struct TuningResult {
+    dir: PathBuf,
+    id: String,
+    save: Option<(std::collections::BTreeMap<String, String>, String)>,
+    unpin: bool,
+    reset_prefix: bool,
 }

@@ -1,5 +1,6 @@
 use crate::exe::{find_candidates, legacy_hint, pick};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -24,6 +25,46 @@ struct Profile {
     last_played: Option<u64>,
     #[serde(default)]
     favorite: bool,
+    /// Extra environment variables for the game's launch.
+    #[serde(default)]
+    env: BTreeMap<String, String>,
+    /// Extra command-line arguments, as the user typed them.
+    #[serde(default)]
+    args: String,
+    /// Name of the Proton version the game was first launched with (e.g. `GE-Proton9-27`).
+    #[serde(default)]
+    proton: Option<String>,
+}
+
+/// Per-game launch tuning kept in the profile.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Tuning {
+    pub env: BTreeMap<String, String>,
+    pub args: String,
+    /// The pinned Proton version; `None` until the first launch.
+    pub proton: Option<String>,
+}
+
+pub fn read_tuning(game_dir: &Path) -> io::Result<Tuning> {
+    let p = read_profile(game_dir)?.unwrap_or_default();
+    Ok(Tuning {
+        env: p.env,
+        args: p.args,
+        proton: p.proton,
+    })
+}
+
+/// Saves the env map and argument line, keeping the rest of the profile (and the pin).
+pub fn set_tuning(game_dir: &Path, env: BTreeMap<String, String>, args: &str) -> io::Result<()> {
+    update_profile(game_dir, |p| {
+        p.env = env;
+        p.args = args.to_owned();
+    })
+}
+
+/// Pins (or, with `None`, unpins) the Proton version for this game.
+pub fn set_proton_pin(game_dir: &Path, version: Option<&str>) -> io::Result<()> {
+    update_profile(game_dir, |p| p.proton = version.map(str::to_owned))
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

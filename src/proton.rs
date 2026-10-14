@@ -80,3 +80,98 @@ pub fn resolve_default() -> io::Result<Option<PathBuf>> {
     let compat = home.join(".local/share/Steam/compatibilitytools.d");
     resolve(&config, env.as_deref(), &compat)
 }
+
+/// What to do about Proton for one game.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProtonChoice {
+    /// Launch with this (`None`: let umu choose).
+    Use(Option<PathBuf>),
+    /// The game was pinned to a version this machine does not have.
+    Mismatch {
+        pinned: String,
+        /// The newest version installed here, offered as "use newest anyway".
+        newest: Option<PathBuf>,
+    },
+}
+
+/// Like `resolve`, but honoring the game's pinned version. An explicit per-machine choice
+/// (override file or `$PROTONPATH`) wins without a warning; otherwise an installed pin is
+/// used even if newer versions exist, and a missing pin is reported as a mismatch.
+pub fn resolve_for_game(
+    config_file: &Path,
+    env_protonpath: Option<&Path>,
+    compat_dir: &Path,
+    pinned: Option<&str>,
+) -> io::Result<ProtonChoice> {
+    if let Some(path) = read_override(config_file)? {
+        return Ok(ProtonChoice::Use(Some(path)));
+    }
+    if let Some(path) = env_protonpath {
+        return Ok(ProtonChoice::Use(Some(path.to_path_buf())));
+    }
+    let newest = newest_installed(compat_dir)?;
+    let Some(pinned) = pinned else {
+        return Ok(ProtonChoice::Use(newest));
+    };
+    // A pin comes from a profile that may have been shared: only a plain folder name counts.
+    let wanted = compat_dir.join(pinned);
+    let plain = matches!(
+        Path::new(pinned)
+            .components()
+            .collect::<Vec<_>>()
+            .as_slice(),
+        [std::path::Component::Normal(_)]
+    );
+    if plain && wanted.is_dir() {
+        return Ok(ProtonChoice::Use(Some(wanted)));
+    }
+    Ok(ProtonChoice::Mismatch {
+        pinned: pinned.to_owned(),
+        newest,
+    })
+}
+
+/// Installed `GE-Proton*` versions under `compat_dir`, newest first.
+pub fn installed(compat_dir: &Path) -> io::Result<Vec<PathBuf>> {
+    let entries = match std::fs::read_dir(compat_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(rest) = name.strip_prefix(GE_PREFIX)
+            && entry.file_type()?.is_dir()
+        {
+            found.push((version_key(rest), entry.path()));
+        }
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(found.into_iter().map(|(_, path)| path).collect())
+}
+
+/// The Steam compatibility-tools folder where GE-Proton versions are installed.
+pub fn compat_dir() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    home.join(".local/share/Steam/compatibilitytools.d")
+}
+
+/// `resolve_for_game` against this machine's real config, `$PROTONPATH` and compat dir.
+pub fn resolve_for_game_default(pinned: Option<&str>) -> io::Result<ProtonChoice> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home.join(".config"));
+    let config = config_home.join("dlsite-launcher").join("proton-path");
+    let env = std::env::var_os("PROTONPATH")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    resolve_for_game(&config, env.as_deref(), &compat_dir(), pinned)
+}

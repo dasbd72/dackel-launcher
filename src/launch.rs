@@ -1,4 +1,5 @@
-use crate::profile::{self, ExeState};
+use crate::profile::{self, ExeState, Tuning};
+use crate::tuning::{prefix_dir, split_args};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io;
@@ -19,12 +20,23 @@ pub struct LaunchPlan {
 
 /// Builds the `umu-run` invocation for a game's exe. Pure: no filesystem access.
 pub fn plan(game_dir: &Path, exe_rel: &Path, proton: Option<&Path>) -> LaunchPlan {
+    plan_with(game_dir, exe_rel, proton, &Tuning::default())
+}
+
+/// Like `plan`, with the game's own env and arguments applied. The user's env wins over
+/// the defaults, except `WINEPREFIX`: the game's prefix is what Reset prefix manages.
+pub fn plan_with(
+    game_dir: &Path,
+    exe_rel: &Path,
+    proton: Option<&Path>,
+    tuning: &Tuning,
+) -> LaunchPlan {
     let exe = game_dir.join(exe_rel);
     let meta = game_dir.join(META_DIR);
     let mut env = BTreeMap::new();
     env.insert(
         "WINEPREFIX".to_owned(),
-        meta.join("wine").display().to_string(),
+        prefix_dir(game_dir).display().to_string(),
     );
     env.insert("LANG".to_owned(), "ja_JP.UTF-8".to_owned());
     env.insert("LC_ALL".to_owned(), "ja_JP.UTF-8".to_owned());
@@ -32,10 +44,20 @@ pub fn plan(game_dir: &Path, exe_rel: &Path, proton: Option<&Path>) -> LaunchPla
     if let Some(proton) = proton {
         env.insert("PROTONPATH".to_owned(), proton.display().to_string());
     }
+    let prefix = env["WINEPREFIX"].clone();
+    env.extend(tuning.env.clone());
+    env.insert("WINEPREFIX".to_owned(), prefix);
+    let mut args = vec![exe.clone().into_os_string()];
+    args.extend(
+        split_args(&tuning.args)
+            .unwrap_or_else(|_| tuning.args.split_whitespace().map(str::to_owned).collect())
+            .into_iter()
+            .map(OsString::from),
+    );
     let working_dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
     LaunchPlan {
         program: "umu-run".to_owned(),
-        args: vec![exe.into_os_string()],
+        args,
         env,
         working_dir,
         log_path: meta.join("last-run.log"),
@@ -152,14 +174,21 @@ impl<S: Spawner> Launcher<S> {
         if self.is_running(game_dir) {
             return Err(LaunchError::AlreadyRunning);
         }
-        let plan = plan(game_dir, exe, proton);
+        let tuning = profile::read_tuning(game_dir)?;
+        let plan = plan_with(game_dir, exe, proton, &tuning);
         let process = self.spawner.spawn(&plan)?;
-        profile::record_launch(game_dir, now)?;
+        // Track the game first: once it is running, nothing below may lose sight of it.
         self.running.push(Running {
             game_dir: game_dir.to_path_buf(),
             started: now,
             process,
         });
+        profile::record_launch(game_dir, now)?;
+        // The first launch pins the Proton version, so another machine can notice a mismatch.
+        // A pin that cannot be saved must not make a launch that worked look like a failure.
+        if let (None, Some(version)) = (&tuning.proton, proton.and_then(Path::file_name)) {
+            let _ = profile::set_proton_pin(game_dir, Some(&version.to_string_lossy()));
+        }
         Ok(())
     }
 
