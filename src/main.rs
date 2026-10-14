@@ -1,3 +1,4 @@
+use dlsite_launcher::extract::{self, Encoding, Status};
 use dlsite_launcher::fetch::HttpFetch;
 use dlsite_launcher::info::{GameInfo, cover_path, load};
 use dlsite_launcher::library::{Game, resolve_library, scan};
@@ -60,6 +61,7 @@ fn parse_library_override() -> Result<Option<PathBuf>, String> {
 struct Entry {
     game: Game,
     state: Result<ExeState, String>,
+    extract: Result<Status, String>,
 }
 
 enum View {
@@ -72,6 +74,8 @@ struct App {
     library: PathBuf,
     view: View,
     chooser: Option<usize>,
+    encoding: Encoding,
+    message: Option<String>,
     infos: HashMap<String, GameInfo>,
     errors: HashMap<String, String>,
     busy: HashSet<String>,
@@ -84,6 +88,8 @@ impl App {
             library,
             view: View::Missing,
             chooser: None,
+            encoding: Encoding::Auto,
+            message: None,
             infos: HashMap::new(),
             errors: HashMap::new(),
             busy: HashSet::new(),
@@ -101,7 +107,12 @@ impl App {
                     .into_iter()
                     .map(|game| {
                         let state = profile::ensure(&game.dir).map_err(|e| e.to_string());
-                        Entry { game, state }
+                        let extract = extract::status(&game.dir).map_err(|e| e.to_string());
+                        Entry {
+                            game,
+                            state,
+                            extract,
+                        }
                     })
                     .collect(),
             ),
@@ -144,6 +155,14 @@ impl App {
         }
     }
 
+    fn extract_game(&mut self, dir: &std::path::Path) {
+        self.message = Some(match extract::extract(dir, self.encoding) {
+            Ok(()) => format!("Extracted {}", dir.display()),
+            Err(err) => format!("Extract failed: {err}"),
+        });
+        self.rescan();
+    }
+
     fn create_library(&mut self) {
         match std::fs::create_dir_all(&self.library) {
             Ok(()) => self.rescan(),
@@ -155,6 +174,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let mut rescan = false;
+        let mut extract_dir: Option<PathBuf> = None;
         let mut create = false;
         let mut open_chooser = None;
         let mut choice = None;
@@ -170,8 +190,18 @@ impl eframe::App for App {
                 if ui.button("Rescan").clicked() {
                     rescan = true;
                 }
+                egui::ComboBox::from_label("Zip encoding")
+                    .selected_text(encoding_label(self.encoding))
+                    .show_ui(ui, |ui| {
+                        for choice in [Encoding::Auto, Encoding::Cp932, Encoding::Utf8] {
+                            ui.selectable_value(&mut self.encoding, choice, encoding_label(choice));
+                        }
+                    });
                 ui.label(self.library.display().to_string());
             });
+            if let Some(message) = &self.message {
+                ui.label(message);
+            }
         });
 
         egui::CentralPanel::default().show(ui, |ui| match &self.view {
@@ -199,6 +229,9 @@ impl eframe::App for App {
                                 busy: self.busy.contains(&entry.game.id),
                             };
                             let action = tile_ui(ui, &tile);
+                            if let Some(dir) = action.extract {
+                                extract_dir = Some(dir);
+                            }
                             if action.reload {
                                 reload_games.push(entry.game.clone());
                             }
@@ -243,6 +276,8 @@ impl eframe::App for App {
                 Ok(()) => self.rescan(),
                 Err(err) => self.view = View::Error(err.to_string()),
             }
+        } else if let Some(dir) = extract_dir {
+            self.extract_game(&dir);
         } else if create {
             self.create_library();
         } else if rescan {
@@ -265,6 +300,7 @@ struct Tile<'a> {
 struct TileAction {
     reload: bool,
     clicked: bool,
+    extract: Option<PathBuf>,
 }
 
 /// Draws one game tile: cover, title, exe status and a Reload button.
@@ -273,6 +309,7 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
     let mut action = TileAction {
         reload: false,
         clicked: false,
+        extract: None,
     };
     ui.vertical(|ui| {
         ui.set_width(200.0);
@@ -310,6 +347,25 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
             Err(msg) => msg.clone(),
         };
         ui.weak(status);
+        match &tile.entry.extract {
+            Err(msg) => {
+                ui.colored_label(egui::Color32::LIGHT_RED, msg);
+            }
+            Ok(Status::NotExtracted) => {
+                ui.label("not extracted");
+                if ui.button("Extract").clicked() {
+                    action.extract = Some(game.dir.clone());
+                }
+            }
+            Ok(Status::ExtractManually(_)) => {
+                ui.colored_label(egui::Color32::YELLOW, "extract manually");
+            }
+            Ok(Status::Ready { has_zip }) => {
+                if *has_zip && ui.button("Re-extract").clicked() {
+                    action.extract = Some(game.dir.clone());
+                }
+            }
+        }
         if let Some(err) = tile.error {
             ui.colored_label(egui::Color32::LIGHT_RED, err);
         }
@@ -319,4 +375,12 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
             .clicked();
     });
     action
+}
+
+fn encoding_label(encoding: Encoding) -> &'static str {
+    match encoding {
+        Encoding::Auto => "Auto",
+        Encoding::Cp932 => "cp932",
+        Encoding::Utf8 => "UTF-8",
+    }
 }
