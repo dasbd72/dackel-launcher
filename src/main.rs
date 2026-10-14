@@ -250,8 +250,8 @@ struct App {
     libraries: Vec<PathBuf>,
     /// Libraries that could not be read at the last scan (drive unplugged, folder gone).
     offline: Vec<PathBuf>,
-    /// Show only games from this library.
-    library_filter: Option<PathBuf>,
+    /// Show only games from this entry of `libraries`.
+    library_filter: Option<usize>,
     libraries_open: bool,
     /// How far down the details page is scrolled, in points.
     details_scroll: f32,
@@ -409,7 +409,7 @@ impl App {
                     .map(|game| {
                         // A folder being extracted is half built: do not detect (and pin) an
                         // exe from it yet. The rescan after the job finishes does that.
-                        let state = if extracting.contains(&game.key()) {
+                        let state = if extracting.contains(&game.dir_key()) {
                             Ok(ExeState::NeedsExeChoice {
                                 candidates: Vec::new(),
                             })
@@ -699,8 +699,7 @@ impl App {
             .into_iter()
             .filter(|&i| {
                 self.library_filter
-                    .as_deref()
-                    .is_none_or(|root| entries[i].game.dir.parent() == Some(root))
+                    .is_none_or(|slot| entries[i].game.slot == slot)
             })
             .collect()
     }
@@ -710,11 +709,7 @@ impl App {
         if self.libraries.len() < 2 {
             return None;
         }
-        let at = self
-            .libraries
-            .iter()
-            .position(|root| game.dir.parent() == Some(root.as_path()))?;
-        library_labels(&self.libraries).into_iter().nth(at)
+        library_labels(&self.libraries).into_iter().nth(game.slot)
     }
 
     /// Keeps the cursor on a game that is on screen, so focus is never lost.
@@ -915,7 +910,9 @@ impl App {
                 }
             });
         if add {
-            match add_library(&self.libraries, &self.library_input) {
+            // Only the added libraries count as duplicates: listing the folder beside the program
+            // again is allowed, and then its games show twice.
+            match add_library(&self.settings.libraries, &self.library_input) {
                 Ok(path) => {
                     self.settings.libraries.push(path.clone());
                     self.libraries.push(path);
@@ -929,23 +926,23 @@ impl App {
         }
         if let Some(i) = remove {
             let gone = self.libraries.remove(i);
-            self.settings.libraries.retain(|l| *l != gone);
-            if self.library_filter.as_ref() == Some(&gone) {
-                self.library_filter = None;
-            }
-            // Games of the removed library: stop extracting them and leave their page.
-            let inside = |key: &str| std::path::Path::new(key).parent() == Some(gone.as_path());
-            let running: Vec<String> = self
-                .extracting
-                .keys()
-                .filter(|k| inside(k))
-                .cloned()
-                .collect();
-            for key in running {
-                self.cancel_extraction(&key);
-            }
-            if matches!(&self.screen, Screen::Details(key) if inside(key)) {
-                self.close_details_page();
+            // Slot 0 is the library beside the program; the added ones follow it.
+            self.settings.libraries.remove(i - 1);
+            // Later slots move up, so keys, the filter and the open page would point at the
+            // wrong games: go back to the grid with no filter.
+            self.library_filter = None;
+            self.close_details_page();
+            // Stop extracting into a folder that is no longer listed anywhere.
+            if !self.libraries.contains(&gone) {
+                let running: Vec<String> = self
+                    .extracting
+                    .keys()
+                    .filter(|k| std::path::Path::new(k).parent() == Some(gone.as_path()))
+                    .cloned()
+                    .collect();
+                for key in running {
+                    self.cancel_extraction(&key);
+                }
             }
             self.save_settings();
             self.rescan();
@@ -1005,11 +1002,7 @@ impl App {
             Picker::Library => {
                 let mut labels = vec!["All libraries".to_owned()];
                 labels.extend(library_labels(&self.libraries));
-                let current = self
-                    .library_filter
-                    .as_ref()
-                    .and_then(|f| self.libraries.iter().position(|l| l == f))
-                    .map_or(0, |i| i + 1);
+                let current = self.library_filter.map_or(0, |slot| slot + 1);
                 PickerList {
                     title: "Library",
                     labels,
@@ -1061,8 +1054,7 @@ impl App {
             Picker::Library => {
                 self.library_filter = index
                     .checked_sub(1)
-                    .and_then(|i| self.libraries.get(i))
-                    .cloned();
+                    .filter(|slot| *slot < self.libraries.len());
             }
             Picker::Debounce => {
                 if let Some(ms) = DEBOUNCE_PRESETS_MS.get(index) {
@@ -1121,7 +1113,8 @@ impl App {
                 };
                 let entry = &entries[i];
                 let dir = entry.game.dir.clone();
-                if self.launcher.is_running(&dir) || self.extracting.contains_key(&entry.game.key())
+                if self.launcher.is_running(&dir)
+                    || self.extracting.contains_key(&entry.game.dir_key())
                 {
                     return;
                 }
@@ -1141,8 +1134,8 @@ impl App {
                 if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view) {
                     let game = entries[i].game.clone();
                     // While a game is extracting, this button cancels that instead.
-                    if self.extracting.contains_key(&game.id) {
-                        self.cancel_extraction(&game.id);
+                    if self.extracting.contains_key(&game.dir_key()) {
+                        self.cancel_extraction(&game.dir_key());
                     } else {
                         self.reload(game);
                     }
@@ -1388,11 +1381,13 @@ impl eframe::App for App {
         let mut details_choice: Option<(PathBuf, PathBuf)> = None;
         let mut tuning_action: Option<TuningResult> = None;
         // The pin is re-read each frame the page is open, so the first launch shows it at once.
-        let tuning_pin = match &self.screen {
-            Screen::Details(key) => profile::read_tuning(Path::new(key))
-                .ok()
+        let tuning_pin = match (&self.screen, &self.view) {
+            (Screen::Details(key), View::Games(entries)) => entries
+                .iter()
+                .find(|e| e.game.key() == *key)
+                .and_then(|e| profile::read_tuning(&e.game.dir).ok())
                 .and_then(|t| t.proton),
-            Screen::Grid => None,
+            _ => None,
         };
         self.collect_reloads();
         if !self.busy.is_empty() {
@@ -1477,9 +1472,8 @@ impl eframe::App for App {
                         let labels = library_labels(&self.libraries);
                         let shown = self
                             .library_filter
-                            .as_ref()
-                            .and_then(|f| self.libraries.iter().position(|l| l == f))
-                            .map_or("All libraries", |i| labels[i].as_str());
+                            .and_then(|slot| labels.get(slot))
+                            .map_or("All libraries", String::as_str);
                         let response = egui::ComboBox::from_id_salt("library-filter")
                             .selected_text(shown)
                             .show_ui(ui, |ui| {
@@ -1492,10 +1486,10 @@ impl eframe::App for App {
                                 {
                                     self.library_filter = None;
                                 }
-                                for (root, label) in self.libraries.iter().zip(&labels) {
-                                    let on = self.library_filter.as_ref() == Some(root);
+                                for (slot, label) in labels.iter().enumerate() {
+                                    let on = self.library_filter == Some(slot);
                                     if ui.selectable_label(on, label).clicked() {
-                                        self.library_filter = Some(root.clone());
+                                        self.library_filter = Some(slot);
                                     }
                                 }
                             })
@@ -1582,7 +1576,10 @@ impl eframe::App for App {
                     error: self.errors.get(id).map(String::as_str),
                     busy: self.busy.contains(id),
                     running: self.launcher.is_running(&entry.game.dir),
-                    extracting: self.extracting.get(id).map(ExtractJob::progress),
+                    extracting: self
+                        .extracting
+                        .get(&entry.game.dir_key())
+                        .map(ExtractJob::progress),
                     dir: &entry.game.dir,
                     proton_pin: tuning_pin.as_deref(),
                 };
@@ -1612,7 +1609,7 @@ impl eframe::App for App {
                     details_extract = Some(entry.game.dir.clone());
                 }
                 if action.cancel_extract {
-                    cancel_ids.push(id.clone());
+                    cancel_ids.push(entry.game.dir_key());
                 }
                 if action.launch {
                     launch = entries.iter().position(|e| &e.game.key() == id);
@@ -1662,7 +1659,7 @@ impl eframe::App for App {
                                         running: self.launcher.is_running(&entry.game.dir),
                                         extracting: self
                                             .extracting
-                                            .get(&entry.game.key())
+                                            .get(&entry.game.dir_key())
                                             .map(ExtractJob::progress),
                                         focused: self.control_focus.is_none()
                                             && self.focus_id.as_ref() == Some(&entry.game.key()),
@@ -1692,7 +1689,7 @@ impl eframe::App for App {
                                         launch = Some(i);
                                     }
                                     if action.cancel_extract {
-                                        cancel_ids.push(entry.game.key().clone());
+                                        cancel_ids.push(entry.game.dir_key());
                                     }
                                     if action.favorite {
                                         favorite_id = Some(entry.game.key().clone());

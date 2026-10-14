@@ -44,6 +44,22 @@ mod scanning {
     }
 
     #[test]
+    fn the_same_folder_listed_twice_gives_every_game_twice_with_different_keys() {
+        let lib = library_with(&["RJ111111"]);
+        let root = lib.path().to_path_buf();
+
+        let scans = scan_all(&[root.clone(), root.clone()]);
+        let first = &scans[0].games.as_ref().unwrap()[0];
+        let second = &scans[1].games.as_ref().unwrap()[0];
+
+        assert_eq!(first.dir, second.dir);
+        assert_ne!(first.key(), second.key());
+        assert_eq!(first.dir_key(), second.dir_key());
+        assert_eq!(first.slot, 0);
+        assert_eq!(second.slot, 1);
+    }
+
+    #[test]
     fn the_same_game_id_in_two_libraries_stays_two_separate_games() {
         let a = library_with(&["RJ111111"]);
         let b = library_with(&["RJ111111"]);
@@ -133,6 +149,19 @@ mod labels {
         ];
 
         assert_eq!(library_labels(&roots), ["DLSiteLibrary", "Extra"]);
+    }
+
+    #[test]
+    fn the_same_folder_listed_twice_gets_distinct_labels() {
+        let roots = [
+            PathBuf::from("/run/media/a/DLSiteLibrary"),
+            PathBuf::from("/run/media/a/DLSiteLibrary"),
+        ];
+
+        let labels = library_labels(&roots);
+
+        assert_ne!(labels[0], labels[1]);
+        assert!(labels[1].contains("(2)"), "{labels:?}");
     }
 
     #[test]

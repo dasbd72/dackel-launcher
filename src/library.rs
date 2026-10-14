@@ -21,11 +21,23 @@ pub fn resolve_library(exe_path: &Path, override_dir: Option<&Path>) -> io::Resu
 pub struct Game {
     pub id: String,
     pub dir: PathBuf,
+    /// Which entry of the library list the game came from. The same folder can be listed
+    /// twice, and then every game in it shows twice, once per slot.
+    pub slot: usize,
 }
 
 impl Game {
-    /// Identifies this game among all libraries: the same RJ code can sit in two of them.
+    /// Identifies this game on screen among all libraries and slots. Opaque: not a path.
     pub fn key(&self) -> String {
+        match self.slot {
+            0 => self.dir_key(),
+            slot => format!("#{slot} {}", self.dir_key()),
+        }
+    }
+
+    /// Identifies the game's folder. Two slots of one folder share it, so work on the
+    /// folder (extracting, running) is tracked once and shows on both.
+    pub fn dir_key(&self) -> String {
         self.dir.to_string_lossy().into_owned()
     }
 }
@@ -42,9 +54,15 @@ pub struct LibraryScan {
 pub fn scan_all(roots: &[PathBuf]) -> Vec<LibraryScan> {
     roots
         .iter()
-        .map(|root| LibraryScan {
+        .enumerate()
+        .map(|(slot, root)| LibraryScan {
             root: root.clone(),
-            games: scan(root),
+            games: scan(root).map(|games| {
+                games
+                    .into_iter()
+                    .map(|game| Game { slot, ..game })
+                    .collect()
+            }),
         })
         .collect()
 }
@@ -93,22 +111,31 @@ pub fn add_library(listed: &[PathBuf], typed: &str) -> Result<PathBuf, AddLibrar
 }
 
 /// Short names for a list of libraries: the folder name, or the full path when two
-/// libraries share a folder name.
+/// libraries share a folder name. The same folder listed again gets "(2)", "(3)"...
 pub fn library_labels(roots: &[PathBuf]) -> Vec<String> {
     let name = |root: &Path| root.file_name().map(|n| n.to_string_lossy().into_owned());
     roots
         .iter()
-        .map(|root| match name(root) {
-            Some(n)
-                if roots
-                    .iter()
-                    .filter(|r| name(r).as_deref() == Some(&n))
-                    .count()
-                    == 1 =>
-            {
-                n
+        .enumerate()
+        .map(|(i, root)| {
+            let unique = match name(root) {
+                Some(n) => {
+                    roots
+                        .iter()
+                        .filter(|r| name(r).as_deref() == Some(&n))
+                        .count()
+                        == 1
+                }
+                None => false,
+            };
+            let label = match name(root) {
+                Some(n) if unique => n,
+                _ => root.display().to_string(),
+            };
+            match roots[..i].iter().filter(|r| *r == root).count() {
+                0 => label,
+                earlier => format!("{label} ({})", earlier + 1),
             }
-            _ => root.display().to_string(),
         })
         .collect()
 }
@@ -124,6 +151,7 @@ pub fn scan(library_dir: &Path) -> io::Result<Vec<Game>> {
             games.push(Game {
                 id: id.to_owned(),
                 dir: path,
+                slot: 0,
             });
         }
     }

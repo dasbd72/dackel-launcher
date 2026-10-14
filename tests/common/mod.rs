@@ -44,5 +44,6 @@ pub fn game_in(lib: &Path, id: &str) -> Game {
     Game {
         id: id.to_owned(),
         dir,
+        slot: 0,
     }
 }
