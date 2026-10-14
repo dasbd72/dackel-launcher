@@ -661,7 +661,7 @@ impl App {
         self.save_settings();
     }
 
-    /// The manager for the extra libraries: list them, add a typed path, remove one.
+    /// The manager for the added libraries: list them, add a typed path, remove one.
     fn libraries_window(&mut self, ctx: &egui::Context) {
         let mut remove: Option<usize> = None;
         let mut add = false;
@@ -671,7 +671,16 @@ impl App {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
+                // The library beside the program is listed only when it was found, and it
+                // cannot be removed. Added libraries are listed even when offline.
+                let shown = |i: usize, root: &PathBuf| i > 0 || !self.offline.contains(root);
+                if !self.libraries.iter().enumerate().any(|(i, r)| shown(i, r)) {
+                    ui.weak("No libraries found.");
+                }
                 for (i, root) in self.libraries.iter().enumerate() {
+                    if !shown(i, root) {
+                        continue;
+                    }
                     ui.horizontal(|ui| {
                         ui.label(root.display().to_string());
                         if self.offline.contains(root) {
