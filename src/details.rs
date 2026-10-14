@@ -31,10 +31,17 @@ pub struct DetailsAction {
 }
 
 /// Lists exe candidates as buttons; returns the one clicked, if any.
-pub fn exe_choices(ui: &mut egui::Ui, candidates: &[PathBuf]) -> Option<PathBuf> {
+/// `selected` marks the entry a controller cursor is on.
+pub fn exe_choices(
+    ui: &mut egui::Ui,
+    candidates: &[PathBuf],
+    selected: Option<usize>,
+) -> Option<PathBuf> {
     let mut chosen = None;
-    for candidate in candidates {
-        if ui.button(candidate.display().to_string()).clicked() {
+    for (i, candidate) in candidates.iter().enumerate() {
+        let button =
+            egui::Button::new(candidate.display().to_string()).selected(selected == Some(i));
+        if ui.add(button).clicked() {
             chosen = Some(candidate.clone());
         }
     }
@@ -112,7 +119,7 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView) -> DetailsAction {
             };
             if !view.candidates.is_empty() {
                 ui.label("Choose exe:");
-                action.choose_exe = exe_choices(ui, view.candidates);
+                action.choose_exe = exe_choices(ui, view.candidates, None);
             }
 
             ui.separator();

@@ -8,10 +8,12 @@ use dlsite_launcher::fonts;
 use dlsite_launcher::info::{GameInfo, cover_path, load};
 use dlsite_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dlsite_launcher::library::{Game, resolve_library, scan};
+use dlsite_launcher::nav::{self, Command, Context, Input, Repeater};
 use dlsite_launcher::profile::{self, ExeState, Stats};
 use dlsite_launcher::proton;
 use dlsite_launcher::reload::Reloads;
 use eframe::egui;
+use gilrs::{Axis, Button, EventType, Gilrs};
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -130,6 +132,15 @@ struct App {
     launcher: Launcher<UmuSpawner>,
     screen: Screen,
     query: Query,
+    gilrs: Option<Gilrs>,
+    stick: Repeater,
+    /// The game the controller cursor is on (by id, so it survives rescans and re-sorts).
+    focus_id: Option<String>,
+    /// True until the user moves the cursor: it then tracks the first game as the list re-sorts.
+    focus_auto: bool,
+    chooser_sel: usize,
+    columns: usize,
+    scroll_to_focus: bool,
 }
 
 impl App {
@@ -151,6 +162,15 @@ impl App {
                 favorites_only: false,
                 sort: Sort::Title,
             },
+            gilrs: Gilrs::new()
+                .map_err(|err| eprintln!("gamepad support unavailable: {err}"))
+                .ok(),
+            stick: Repeater::default(),
+            focus_id: None,
+            focus_auto: true,
+            chooser_sel: 0,
+            columns: 1,
+            scroll_to_focus: false,
         };
         app.rescan();
         app
@@ -264,6 +284,202 @@ impl App {
         }
     }
 
+    /// Entry indices in the order the grid shows them.
+    fn visible(&self) -> Vec<usize> {
+        let View::Games(entries) = &self.view else {
+            return Vec::new();
+        };
+        let cards: Vec<Card> = entries
+            .iter()
+            .map(|e| card_of(e, self.infos.get(&e.game.id)))
+            .collect();
+        browse::browse(&cards, &self.query)
+    }
+
+    /// Keeps the cursor on a game that is on screen, so focus is never lost.
+    fn normalize_focus(&mut self, visible: &[usize]) {
+        let View::Games(entries) = &self.view else {
+            return;
+        };
+        let on_screen = |id: &String| visible.iter().any(|&i| &entries[i].game.id == id);
+        if self.focus_auto || !self.focus_id.as_ref().is_some_and(on_screen) {
+            self.focus_id = visible.first().map(|&i| entries[i].game.id.clone());
+        }
+    }
+
+    /// The entry controller commands act on: the open details page, else the cursor.
+    fn target_index(&self) -> Option<usize> {
+        let View::Games(entries) = &self.view else {
+            return None;
+        };
+        let id = match &self.screen {
+            Screen::Details(id) => Some(id),
+            Screen::Grid => self.focus_id.as_ref(),
+        }?;
+        entries.iter().position(|e| &e.game.id == id)
+    }
+
+    fn context(&self) -> Context {
+        if self.chooser.is_some() {
+            Context::Chooser
+        } else if matches!(self.screen, Screen::Details(_)) {
+            Context::Details
+        } else {
+            Context::Grid
+        }
+    }
+
+    fn open_chooser(&mut self, index: usize) {
+        self.chooser = Some(index);
+        self.chooser_sel = 0;
+    }
+
+    fn apply(&mut self, command: Command, visible: &[usize]) {
+        match command {
+            Command::Move(dir) => {
+                let View::Games(entries) = &self.view else {
+                    return;
+                };
+                let at = visible
+                    .iter()
+                    .position(|&i| Some(&entries[i].game.id) == self.focus_id.as_ref())
+                    .unwrap_or(0);
+                let to = nav::move_focus(at, visible.len(), self.columns, dir);
+                if let Some(&i) = visible.get(to) {
+                    self.focus_id = Some(entries[i].game.id.clone());
+                    self.focus_auto = false;
+                    self.scroll_to_focus = true;
+                }
+            }
+            Command::Primary => {
+                let Some(i) = self.target_index() else { return };
+                let View::Games(entries) = &self.view else {
+                    return;
+                };
+                let entry = &entries[i];
+                let dir = entry.game.dir.clone();
+                if self.launcher.is_running(&dir) {
+                    return;
+                }
+                if matches!(entry.extract, Ok(Status::NotExtracted)) {
+                    self.extract_game(&dir);
+                } else if matches!(entry.state, Ok(ExeState::Ready { .. })) {
+                    self.launch_game(i);
+                } else if needs_choice(entry) {
+                    self.open_chooser(i);
+                }
+            }
+            Command::Reload => {
+                if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view) {
+                    let game = entries[i].game.clone();
+                    self.reload(game);
+                }
+            }
+            Command::OpenDetails => {
+                if let Some(id) = self.focus_id.clone() {
+                    self.screen = Screen::Details(id);
+                }
+            }
+            Command::Back => self.screen = Screen::Grid,
+            Command::ToggleFavorite => {
+                if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view) {
+                    let id = entries[i].game.id.clone();
+                    self.toggle_favorite(&id);
+                }
+            }
+            Command::ChooseExe => {
+                if let Some(i) = self.target_index() {
+                    self.open_chooser(i);
+                }
+            }
+            Command::ReExtract => {
+                if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view)
+                    && matches!(entries[i].extract, Ok(Status::Ready { has_zip: true }))
+                {
+                    let dir = entries[i].game.dir.clone();
+                    self.extract_game(&dir);
+                }
+            }
+            Command::CycleSort(delta) => {
+                let all = [Sort::LastPlayed, Sort::Title, Sort::DateAdded];
+                self.query.sort = cycled(&all, self.query.sort, delta);
+            }
+            Command::CycleEncoding(delta) => {
+                let all = [Encoding::Auto, Encoding::Cp932, Encoding::Utf8];
+                self.encoding = cycled(&all, self.encoding, delta);
+            }
+            Command::Rescan => self.rescan(),
+            Command::ToggleFavoritesOnly => self.query.favorites_only = !self.query.favorites_only,
+            Command::ResetFilters => {
+                self.query.text.clear();
+                self.query.favorites_only = false;
+            }
+            Command::ChooserMove(delta) => {
+                let View::Games(entries) = &self.view else {
+                    return;
+                };
+                let len = self
+                    .chooser
+                    .and_then(|i| entries.get(i))
+                    .map_or(0, |e| e.candidates.len());
+                let last = len.saturating_sub(1) as i64;
+                self.chooser_sel =
+                    (self.chooser_sel as i64 + i64::from(delta)).clamp(0, last) as usize;
+            }
+            Command::ChooserPick => {
+                let View::Games(entries) = &self.view else {
+                    return;
+                };
+                let picked = self.chooser.and_then(|i| entries.get(i)).and_then(|e| {
+                    Some((
+                        e.game.dir.clone(),
+                        e.candidates.get(self.chooser_sel)?.clone(),
+                    ))
+                });
+                if let Some((dir, exe)) = picked {
+                    match profile::choose(&dir, &exe) {
+                        Ok(()) => self.rescan(),
+                        Err(err) => self.view = View::Error(err.to_string()),
+                    }
+                }
+            }
+            Command::ChooserCancel => self.chooser = None,
+        }
+    }
+
+    /// Gamepad and keyboard presses since the last frame.
+    fn poll_inputs(&mut self, ctx: &egui::Context) -> Vec<Input> {
+        let mut inputs = Vec::new();
+        let now_ms = (ctx.input(|i| i.time) * 1000.0) as u64;
+        // Ignore the pad while another window (a running game) has focus.
+        let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
+        if let Some(gilrs) = &mut self.gilrs {
+            while let Some(event) = gilrs.next_event() {
+                if let (true, EventType::ButtonPressed(button, _)) = (focused, event.event)
+                    && let Some(input) = pad_input(button)
+                {
+                    inputs.push(input);
+                }
+            }
+            let held = gilrs.gamepads().find_map(|(_, pad)| {
+                nav::stick_dir(pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY))
+            });
+            let fired = self.stick.update(now_ms, held.filter(|_| focused));
+            inputs.extend(fired.map(dir_input));
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
+        if !ctx.egui_wants_keyboard_input() {
+            ctx.input(|i| {
+                for (key, input) in KEYBOARD {
+                    if i.key_pressed(*key) {
+                        inputs.push(*input);
+                    }
+                }
+            });
+        }
+        inputs
+    }
+
     fn create_library(&mut self) {
         match std::fs::create_dir_all(&self.library) {
             Ok(()) => self.rescan(),
@@ -274,6 +490,19 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        let inputs = self.poll_inputs(&ctx);
+        let visible = self.visible();
+        self.normalize_focus(&visible);
+        for input in inputs {
+            if let Some(command) = nav::command(self.context(), input) {
+                self.apply(command, &visible);
+            }
+        }
+        // Commands can rescan or re-sort; make sure the cursor is still on a visible game.
+        let visible = self.visible();
+        self.normalize_focus(&visible);
+
         let mut rescan = false;
         let mut extract_dir: Option<PathBuf> = None;
         let mut create = false;
@@ -281,6 +510,7 @@ impl eframe::App for App {
         let mut choice = None;
         let mut close_chooser = false;
         let mut launch = None;
+        let mut clicked_focus: Option<String> = None;
         let mut open_details: Option<String> = None;
         let mut favorite_id: Option<String> = None;
         let mut back = false;
@@ -329,6 +559,19 @@ impl eframe::App for App {
             if let Some(message) = &self.message {
                 ui.label(message);
             }
+        });
+
+        let hint = match self.context() {
+            Context::Grid => {
+                "A Launch   B Reset filters   X Reload   Y Details   LB/RB Sort   LT/RT Zip encoding   Select Favorites only   Start Rescan"
+            }
+            Context::Details => {
+                "A Launch   B Back   X Reload   Y Favorite   LB Choose exe   RB Re-extract   Start Rescan"
+            }
+            Context::Chooser => "Up/Down Select   A Pick   B Cancel",
+        };
+        egui::Panel::bottom("hints").show(ui, |ui| {
+            ui.weak(hint);
         });
 
         egui::CentralPanel::default().show(ui, |ui| match (&self.screen, &self.view) {
@@ -396,6 +639,7 @@ impl eframe::App for App {
                     let columns = ((ui.available_width() + spacing) / (TILE_WIDTH + spacing))
                         .floor()
                         .max(1.0) as usize;
+                    self.columns = columns;
                     for row in order.chunks(columns) {
                         ui.horizontal_top(|ui| {
                             for &i in row {
@@ -406,8 +650,20 @@ impl eframe::App for App {
                                     error: self.errors.get(&entry.game.id).map(String::as_str),
                                     busy: self.busy.contains(&entry.game.id),
                                     running: self.launcher.is_running(&entry.game.dir),
+                                    focused: self.focus_id.as_ref() == Some(&entry.game.id),
                                 };
                                 let action = tile_ui(ui, &tile);
+                                if tile.focused && self.scroll_to_focus {
+                                    ui.scroll_to_rect(action.rect.expand(8.0), None);
+                                }
+                                if action.clicked
+                                    || action.launch
+                                    || action.details
+                                    || action.favorite
+                                    || action.extract.is_some()
+                                {
+                                    clicked_focus = Some(entry.game.id.clone());
+                                }
                                 if let Some(dir) = action.extract {
                                     extract_dir = Some(dir);
                                 }
@@ -434,12 +690,16 @@ impl eframe::App for App {
 
         if let (Some(i), View::Games(entries)) = (self.chooser, &self.view)
             && let Some(entry) = entries.get(i)
-            && let Ok(ExeState::NeedsExeChoice { candidates }) = &entry.state
         {
             egui::Window::new(format!("Choose exe for {}", entry.game.id))
                 .collapsible(false)
                 .show(ui.ctx(), |ui| {
-                    if let Some(candidate) = exe_choices(ui, candidates) {
+                    if entry.candidates.is_empty() {
+                        ui.label("No exe found in this folder.");
+                    }
+                    if let Some(candidate) =
+                        exe_choices(ui, &entry.candidates, Some(self.chooser_sel))
+                    {
                         choice = Some((entry.game.dir.clone(), candidate));
                     }
                     if ui.button("Cancel").clicked() {
@@ -448,6 +708,11 @@ impl eframe::App for App {
                 });
         }
 
+        self.scroll_to_focus = false;
+        if let Some(id) = clicked_focus {
+            self.focus_id = Some(id);
+            self.focus_auto = false;
+        }
         if let Some(i) = launch {
             self.launch_game(i);
         }
@@ -519,6 +784,7 @@ struct Tile<'a> {
     error: Option<&'a str>,
     busy: bool,
     running: bool,
+    focused: bool,
 }
 
 struct TileAction {
@@ -527,6 +793,7 @@ struct TileAction {
     extract: Option<PathBuf>,
     favorite: bool,
     details: bool,
+    rect: egui::Rect,
 }
 
 /// Draws one game tile: cover, title, exe status and a Reload button.
@@ -538,8 +805,9 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
         extract: None,
         favorite: false,
         details: false,
+        rect: egui::Rect::NOTHING,
     };
-    ui.vertical(|ui| {
+    let tile_rect = ui.vertical(|ui| {
         ui.set_width(TILE_WIDTH);
         let size = egui::vec2(TILE_WIDTH, 150.0);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
@@ -617,6 +885,15 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
                 .clicked();
         });
     });
+    action.rect = tile_rect.response.rect;
+    if tile.focused {
+        ui.painter().rect_stroke(
+            action.rect.expand(3.0),
+            6.0,
+            egui::Stroke::new(3.0, egui::Color32::from_rgb(90, 170, 255)),
+            egui::StrokeKind::Outside,
+        );
+    }
     action
 }
 
@@ -626,4 +903,52 @@ fn encoding_label(encoding: Encoding) -> &'static str {
         Encoding::Cp932 => "cp932",
         Encoding::Utf8 => "UTF-8",
     }
+}
+
+const KEYBOARD: &[(egui::Key, Input)] = &[
+    (egui::Key::ArrowUp, Input::Up),
+    (egui::Key::ArrowDown, Input::Down),
+    (egui::Key::ArrowLeft, Input::Left),
+    (egui::Key::ArrowRight, Input::Right),
+    (egui::Key::Enter, Input::A),
+    (egui::Key::Escape, Input::B),
+    (egui::Key::Backspace, Input::B),
+    (egui::Key::R, Input::X),
+    (egui::Key::D, Input::Y),
+    (egui::Key::F5, Input::Start),
+];
+
+fn pad_input(button: Button) -> Option<Input> {
+    Some(match button {
+        Button::DPadUp => Input::Up,
+        Button::DPadDown => Input::Down,
+        Button::DPadLeft => Input::Left,
+        Button::DPadRight => Input::Right,
+        Button::South => Input::A,
+        Button::East => Input::B,
+        Button::West => Input::X,
+        Button::North => Input::Y,
+        Button::LeftTrigger => Input::LeftBumper,
+        Button::RightTrigger => Input::RightBumper,
+        Button::LeftTrigger2 => Input::LeftTrigger,
+        Button::RightTrigger2 => Input::RightTrigger,
+        Button::Start => Input::Start,
+        Button::Select => Input::Select,
+        _ => return None,
+    })
+}
+
+fn dir_input(dir: nav::Dir) -> Input {
+    match dir {
+        nav::Dir::Up => Input::Up,
+        nav::Dir::Down => Input::Down,
+        nav::Dir::Left => Input::Left,
+        nav::Dir::Right => Input::Right,
+    }
+}
+
+/// The item `delta` steps from `current` in `all`, wrapping around.
+fn cycled<T: Copy + PartialEq>(all: &[T], current: T, delta: i32) -> T {
+    let at = all.iter().position(|&x| x == current).unwrap_or(0) as i32;
+    all[(at + delta).rem_euclid(all.len() as i32) as usize]
 }

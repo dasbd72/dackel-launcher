@@ -6,6 +6,7 @@ pub mod fonts;
 pub mod info;
 pub mod launch;
 pub mod library;
+pub mod nav;
 pub mod profile;
 pub mod proton;
 pub mod reload;
