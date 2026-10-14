@@ -2,6 +2,7 @@ pub mod browse;
 pub mod exe;
 pub mod extract;
 pub mod fetch;
+pub mod fonts;
 pub mod info;
 pub mod launch;
 pub mod library;

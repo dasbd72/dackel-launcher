@@ -4,6 +4,7 @@ use details::{DetailsView, details_ui, exe_choices};
 use dlsite_launcher::browse::{self, Card, Query, Sort};
 use dlsite_launcher::extract::{self, Encoding, Status};
 use dlsite_launcher::fetch::HttpFetch;
+use dlsite_launcher::fonts;
 use dlsite_launcher::info::{GameInfo, cover_path, load};
 use dlsite_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dlsite_launcher::library::{Game, resolve_library, scan};
@@ -43,9 +44,41 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
+            install_japanese_font(&cc.egui_ctx);
             Ok(Box::new(App::new(library)))
         }),
     )
+}
+
+const TILE_WIDTH: f32 = 200.0;
+
+/// egui's built-in fonts have no Japanese glyphs; add a system font as a fallback.
+fn install_japanese_font(ctx: &egui::Context) {
+    let Some(source) = fonts::locate_japanese_font() else {
+        eprintln!("no Japanese font found; Japanese text will show as boxes");
+        return;
+    };
+    let bytes = match std::fs::read(&source.path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            eprintln!("cannot read font {}: {err}", source.path.display());
+            return;
+        }
+    };
+    let mut data = egui::FontData::from_owned(bytes);
+    data.index = source.index;
+    let mut definitions = egui::FontDefinitions::default();
+    definitions
+        .font_data
+        .insert("japanese".to_owned(), Arc::new(data));
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        definitions
+            .families
+            .entry(family)
+            .or_default()
+            .push("japanese".to_owned());
+    }
+    ctx.set_fonts(definitions);
 }
 
 fn parse_library_override() -> Result<Option<PathBuf>, String> {
@@ -247,7 +280,6 @@ impl eframe::App for App {
         let mut open_chooser = None;
         let mut choice = None;
         let mut close_chooser = false;
-        let mut reload_games = Vec::new();
         let mut launch = None;
         let mut open_details: Option<String> = None;
         let mut favorite_id: Option<String> = None;
@@ -360,39 +392,42 @@ impl eframe::App for App {
                     .collect();
                 let order = browse::browse(&cards, &self.query);
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        for i in order {
-                            let entry = &entries[i];
-                            let tile = Tile {
-                                entry,
-                                info: self.infos.get(&entry.game.id),
-                                error: self.errors.get(&entry.game.id).map(String::as_str),
-                                busy: self.busy.contains(&entry.game.id),
-                                running: self.launcher.is_running(&entry.game.dir),
-                            };
-                            let action = tile_ui(ui, &tile);
-                            if let Some(dir) = action.extract {
-                                extract_dir = Some(dir);
+                    let spacing = ui.spacing().item_spacing.x;
+                    let columns = ((ui.available_width() + spacing) / (TILE_WIDTH + spacing))
+                        .floor()
+                        .max(1.0) as usize;
+                    for row in order.chunks(columns) {
+                        ui.horizontal_top(|ui| {
+                            for &i in row {
+                                let entry = &entries[i];
+                                let tile = Tile {
+                                    entry,
+                                    info: self.infos.get(&entry.game.id),
+                                    error: self.errors.get(&entry.game.id).map(String::as_str),
+                                    busy: self.busy.contains(&entry.game.id),
+                                    running: self.launcher.is_running(&entry.game.dir),
+                                };
+                                let action = tile_ui(ui, &tile);
+                                if let Some(dir) = action.extract {
+                                    extract_dir = Some(dir);
+                                }
+                                if action.launch {
+                                    launch = Some(i);
+                                }
+                                if action.favorite {
+                                    favorite_id = Some(entry.game.id.clone());
+                                }
+                                if action.details {
+                                    open_details = Some(entry.game.id.clone());
+                                }
+                                if action.clicked && needs_choice(entry) {
+                                    open_chooser = Some(i);
+                                } else if action.clicked {
+                                    open_details = Some(entry.game.id.clone());
+                                }
                             }
-                            if action.reload {
-                                reload_games.push(entry.game.clone());
-                            }
-                            if action.launch {
-                                launch = Some(i);
-                            }
-                            if action.favorite {
-                                favorite_id = Some(entry.game.id.clone());
-                            }
-                            if action.details {
-                                open_details = Some(entry.game.id.clone());
-                            }
-                            if action.clicked && needs_choice(entry) {
-                                open_chooser = Some(i);
-                            } else if action.clicked {
-                                open_details = Some(entry.game.id.clone());
-                            }
-                        }
-                    });
+                        });
+                    }
                 });
             }
         });
@@ -430,9 +465,6 @@ impl eframe::App for App {
         }
         if let Some(id) = favorite_id {
             self.toggle_favorite(&id);
-        }
-        for game in reload_games {
-            self.reload(game);
         }
         if let Some(game) = details_reload {
             self.reload(game);
@@ -490,7 +522,6 @@ struct Tile<'a> {
 }
 
 struct TileAction {
-    reload: bool,
     launch: bool,
     clicked: bool,
     extract: Option<PathBuf>,
@@ -502,7 +533,6 @@ struct TileAction {
 fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
     let game = &tile.entry.game;
     let mut action = TileAction {
-        reload: false,
         launch: false,
         clicked: false,
         extract: None,
@@ -510,8 +540,8 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
         details: false,
     };
     ui.vertical(|ui| {
-        ui.set_width(200.0);
-        let size = egui::vec2(200.0, 150.0);
+        ui.set_width(TILE_WIDTH);
+        let size = egui::vec2(TILE_WIDTH, 150.0);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
         action.clicked = response.clicked();
         ui.painter()
@@ -538,53 +568,53 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
         let title = tile
             .info
             .map_or(game.id.as_str(), |info| info.title.as_str());
-        ui.add(egui::Label::new(egui::RichText::new(title).strong()).wrap());
-        let status = match &tile.entry.state {
-            Ok(ExeState::Ready { exe }) => exe.display().to_string(),
-            Ok(ExeState::NeedsExeChoice { .. }) => "needs exe choice".to_owned(),
-            Err(msg) => msg.clone(),
-        };
-        ui.weak(status);
-        match &tile.entry.extract {
-            Err(msg) => {
-                ui.colored_label(egui::Color32::LIGHT_RED, msg);
-            }
-            Ok(Status::NotExtracted) => {
-                ui.label("not extracted");
-                if ui.button("Extract").clicked() {
-                    action.extract = Some(game.dir.clone());
+        // Reserve two title lines so the button rows line up across a grid row.
+        ui.vertical(|ui| {
+            ui.set_min_height(2.0 * ui.text_style_height(&egui::TextStyle::Body));
+            ui.add(egui::Label::new(egui::RichText::new(title).strong()).wrap());
+        });
+        if tile.running {
+            ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
+        } else if tile.busy {
+            ui.weak("Reloading...");
+        } else {
+            match (&tile.entry.state, &tile.entry.extract) {
+                (_, Err(msg)) | (Err(msg), _) => {
+                    ui.colored_label(egui::Color32::LIGHT_RED, msg);
                 }
-            }
-            Ok(Status::ExtractManually(_)) => {
-                ui.colored_label(egui::Color32::YELLOW, "extract manually");
-            }
-            Ok(Status::Ready { has_zip }) => {
-                if *has_zip && ui.button("Re-extract").clicked() {
-                    action.extract = Some(game.dir.clone());
+                (_, Ok(Status::NotExtracted)) => {
+                    ui.weak("not extracted");
+                }
+                (_, Ok(Status::ExtractManually(_))) => {
+                    ui.colored_label(egui::Color32::YELLOW, "extract manually");
+                }
+                (Ok(ExeState::NeedsExeChoice { .. }), _) => {
+                    ui.weak("needs exe choice");
+                }
+                (Ok(ExeState::Ready { .. }), _) => {
+                    ui.weak(" ");
                 }
             }
         }
         if let Some(err) = tile.error {
             ui.colored_label(egui::Color32::LIGHT_RED, err);
         }
-        if tile.running {
-            ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
-        } else {
-            let ready = matches!(tile.entry.state, Ok(ExeState::Ready { .. }));
-            action.launch = ui.add_enabled(ready, egui::Button::new("Launch")).clicked();
-        }
-        let label = if tile.busy { "Reloading..." } else { "Reload" };
         ui.horizontal(|ui| {
-            action.reload = ui
-                .add_enabled(!tile.busy, egui::Button::new(label))
-                .clicked();
-            let star = if tile.entry.stats.favorite {
-                "Unfavorite"
+            let not_extracted = matches!(tile.entry.extract, Ok(Status::NotExtracted));
+            let ready = matches!(tile.entry.state, Ok(ExeState::Ready { .. }));
+            if tile.running {
+                ui.add_enabled(false, egui::Button::new("Launch"));
+            } else if not_extracted {
+                if ui.button("Extract").clicked() {
+                    action.extract = Some(game.dir.clone());
+                }
             } else {
-                "Favorite"
-            };
-            action.favorite = ui.button(star).clicked();
+                action.launch = ui.add_enabled(ready, egui::Button::new("Launch")).clicked();
+            }
             action.details = ui.button("Details").clicked();
+            action.favorite = ui
+                .selectable_label(tile.entry.stats.favorite, "Fav")
+                .clicked();
         });
     });
     action
