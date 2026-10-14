@@ -388,6 +388,15 @@ impl App {
         }
     }
 
+    /// Re-reads play time and last-played from the profiles, after a game exits.
+    fn refresh_stats(&mut self) {
+        if let View::Games(entries) = &mut self.view {
+            for entry in entries {
+                entry.stats = profile::read_stats(&entry.game.dir).unwrap_or(entry.stats);
+            }
+        }
+    }
+
     fn save_settings(&mut self) {
         let Some(path) = &self.settings_path else {
             return;
@@ -578,6 +587,28 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// Runs before every frame and, unlike `ui`, also while the window is minimized.
+    /// Watching for a game's exit has to happen here, or play time would only be saved
+    /// once the launcher is brought back on screen.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let was_running = self.launcher.is_running_any();
+        if let Err(err) = self.launcher.poll(unix_now()) {
+            self.message = Some(format!("Play time not saved: {err}"));
+        }
+        let running = self.launcher.is_running_any();
+        if running {
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
+        if was_running && !running {
+            self.refresh_stats();
+            if self.deck_like {
+                // The game is done: bring the launcher back to the front.
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let inputs = self.poll_inputs(&ctx);
@@ -616,13 +647,6 @@ impl eframe::App for App {
         if !self.busy.is_empty() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
-        if let Err(err) = self.launcher.poll(unix_now()) {
-            self.message = Some(format!("Play time not saved: {err}"));
-        }
-        if self.launcher.is_running_any() {
-            ui.ctx().request_repaint_after(Duration::from_millis(500));
-        }
-
         let mut scale_edit = self.scale;
         let mut scale_dragging = false;
         let mut scale_done = false;
