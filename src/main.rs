@@ -1,8 +1,10 @@
 use dlsite_launcher::extract::{self, Encoding, Status};
 use dlsite_launcher::fetch::HttpFetch;
 use dlsite_launcher::info::{GameInfo, cover_path, load};
+use dlsite_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dlsite_launcher::library::{Game, resolve_library, scan};
 use dlsite_launcher::profile::{self, ExeState};
+use dlsite_launcher::proton;
 use dlsite_launcher::reload::Reloads;
 use eframe::egui;
 use std::collections::{HashMap, HashSet};
@@ -80,6 +82,7 @@ struct App {
     errors: HashMap<String, String>,
     busy: HashSet<String>,
     reloads: Reloads,
+    launcher: Launcher<UmuSpawner>,
 }
 
 impl App {
@@ -94,6 +97,7 @@ impl App {
             errors: HashMap::new(),
             busy: HashSet::new(),
             reloads: Reloads::new(Arc::new(HttpFetch)),
+            launcher: Launcher::new(UmuSpawner),
         };
         app.rescan();
         app
@@ -163,6 +167,30 @@ impl App {
         self.rescan();
     }
 
+    fn launch_game(&mut self, index: usize) {
+        let View::Games(entries) = &self.view else {
+            return;
+        };
+        let Some(entry) = entries.get(index) else {
+            return;
+        };
+        let Ok(state) = &entry.state else {
+            return;
+        };
+        self.message = Some(match proton::resolve_default() {
+            Err(err) => format!("Launch failed: {err}"),
+            Ok(proton) => {
+                match self
+                    .launcher
+                    .start(&entry.game.dir, state, proton.as_deref(), unix_now())
+                {
+                    Ok(()) => format!("Launched {}", entry.game.id),
+                    Err(err) => format!("Launch failed: {err}"),
+                }
+            }
+        });
+    }
+
     fn create_library(&mut self) {
         match std::fs::create_dir_all(&self.library) {
             Ok(()) => self.rescan(),
@@ -180,9 +208,16 @@ impl eframe::App for App {
         let mut choice = None;
         let mut close_chooser = false;
         let mut reload_games = Vec::new();
+        let mut launch = None;
         self.collect_reloads();
         if !self.busy.is_empty() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
+        }
+        if let Err(err) = self.launcher.poll(unix_now()) {
+            self.message = Some(format!("Play time not saved: {err}"));
+        }
+        if self.launcher.is_running_any() {
+            ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
 
         egui::Panel::top("top").show(ui, |ui| {
@@ -227,6 +262,7 @@ impl eframe::App for App {
                                 info: self.infos.get(&entry.game.id),
                                 error: self.errors.get(&entry.game.id).map(String::as_str),
                                 busy: self.busy.contains(&entry.game.id),
+                                running: self.launcher.is_running(&entry.game.dir),
                             };
                             let action = tile_ui(ui, &tile);
                             if let Some(dir) = action.extract {
@@ -234,6 +270,9 @@ impl eframe::App for App {
                             }
                             if action.reload {
                                 reload_games.push(entry.game.clone());
+                            }
+                            if action.launch {
+                                launch = Some(i);
                             }
                             if action.clicked && needs_choice(entry) {
                                 open_chooser = Some(i);
@@ -262,6 +301,9 @@ impl eframe::App for App {
                 });
         }
 
+        if let Some(i) = launch {
+            self.launch_game(i);
+        }
         if let Some(i) = open_chooser {
             self.chooser = Some(i);
         }
@@ -295,10 +337,12 @@ struct Tile<'a> {
     info: Option<&'a GameInfo>,
     error: Option<&'a str>,
     busy: bool,
+    running: bool,
 }
 
 struct TileAction {
     reload: bool,
+    launch: bool,
     clicked: bool,
     extract: Option<PathBuf>,
 }
@@ -308,6 +352,7 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
     let game = &tile.entry.game;
     let mut action = TileAction {
         reload: false,
+        launch: false,
         clicked: false,
         extract: None,
     };
@@ -368,6 +413,12 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
         }
         if let Some(err) = tile.error {
             ui.colored_label(egui::Color32::LIGHT_RED, err);
+        }
+        if tile.running {
+            ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
+        } else {
+            let ready = matches!(tile.entry.state, Ok(ExeState::Ready { .. }));
+            action.launch = ui.add_enabled(ready, egui::Button::new("Launch")).clicked();
         }
         let label = if tile.busy { "Reloading..." } else { "Reload" };
         action.reload = ui

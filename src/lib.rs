@@ -2,6 +2,8 @@ pub mod exe;
 pub mod extract;
 pub mod fetch;
 pub mod info;
+pub mod launch;
 pub mod library;
 pub mod profile;
+pub mod proton;
 pub mod reload;

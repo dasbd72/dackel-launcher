@@ -16,10 +16,49 @@ pub enum ExeState {
 struct Profile {
     /// Path of the chosen exe relative to the game folder; `None` while pending a choice.
     exe: Option<PathBuf>,
+    /// Total time spent running the game, in seconds.
+    #[serde(default)]
+    play_time_secs: u64,
+    /// Unix time (seconds) of the most recent launch.
+    #[serde(default)]
+    last_played: Option<u64>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PlayStats {
+    pub play_time_secs: u64,
+    pub last_played: Option<u64>,
+}
+
+pub fn play_stats(game_dir: &Path) -> io::Result<PlayStats> {
+    Ok(read_profile(game_dir)?
+        .map(|p| PlayStats {
+            play_time_secs: p.play_time_secs,
+            last_played: p.last_played,
+        })
+        .unwrap_or_default())
+}
+
+/// Records a launch at `started` (unix seconds).
+pub fn record_launch(game_dir: &Path, started: u64) -> io::Result<()> {
+    update_profile(game_dir, |p| p.last_played = Some(started))
+}
+
+/// Adds `secs` to the game's total play time.
+pub fn add_play_time(game_dir: &Path, secs: u64) -> io::Result<()> {
+    update_profile(game_dir, |p| {
+        p.play_time_secs = p.play_time_secs.saturating_add(secs)
+    })
+}
+
+fn update_profile(game_dir: &Path, change: impl FnOnce(&mut Profile)) -> io::Result<()> {
+    let mut profile = read_profile(game_dir)?.unwrap_or_default();
+    change(&mut profile);
+    write_profile(game_dir, &profile)
 }
 
 pub fn ensure(game_dir: &Path) -> io::Result<ExeState> {
-    if let Some(Profile { exe: Some(exe) }) = read_profile(game_dir)? {
+    if let Some(Profile { exe: Some(exe), .. }) = read_profile(game_dir)? {
         return Ok(ExeState::Ready { exe });
     }
 
@@ -28,6 +67,7 @@ pub fn ensure(game_dir: &Path) -> io::Result<ExeState> {
             game_dir,
             &Profile {
                 exe: Some(exe.clone()),
+                ..Default::default()
             },
         )?;
         return Ok(ExeState::Ready { exe });
@@ -40,12 +80,13 @@ pub fn ensure(game_dir: &Path) -> io::Result<ExeState> {
                 game_dir,
                 &Profile {
                     exe: Some(exe.clone()),
+                    ..Default::default()
                 },
             )?;
             Ok(ExeState::Ready { exe })
         }
         None => {
-            write_profile(game_dir, &Profile { exe: None })?;
+            write_profile(game_dir, &Profile::default())?;
             Ok(ExeState::NeedsExeChoice {
                 candidates: candidates.into_iter().map(|c| c.rel).collect(),
             })
@@ -84,6 +125,7 @@ pub fn choose(game_dir: &Path, exe: &Path) -> io::Result<()> {
         game_dir,
         &Profile {
             exe: Some(exe.to_path_buf()),
+            ..Default::default()
         },
     )
 }
