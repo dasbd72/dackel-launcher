@@ -83,14 +83,18 @@ fn parse_page(id: &str, html: &str) -> Option<(GameInfo, Option<String>)> {
     };
 
     let title = text("#work_name")?;
-    let description = {
-        let sel = Selector::parse(".work_text p").unwrap();
-        let paras: Vec<String> = doc
-            .select(&sel)
-            .map(|p| p.text().collect::<String>().trim().to_owned())
-            .collect();
-        paras.join("\n")
-    };
+    // The intro text is `<br>`-separated lines: join the text nodes of the first block.
+    let description = Selector::parse(".c-productContent__text")
+        .ok()
+        .and_then(|sel| doc.select(&sel).next())
+        .map(|el| {
+            el.text()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
     let cover_url = {
         let sel = Selector::parse(r#"meta[property="og:image"]"#).unwrap();
         doc.select(&sel)
@@ -104,8 +108,8 @@ fn parse_page(id: &str, html: &str) -> Option<(GameInfo, Option<String>)> {
     let info = GameInfo {
         id: id.to_owned(),
         title,
-        circle: text(".maker_name a"),
-        genres: all(".main_genre a"),
+        circle: text(r#"a[href*="/maker_id/"]"#),
+        genres: all(".c-productTitleBox__genre a"),
         description,
         cover: None,
         found: true,
