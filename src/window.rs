@@ -14,6 +14,20 @@ pub fn is_deck_like(get: impl Fn(&str) -> Option<String>) -> bool {
         || get("XDG_CURRENT_DESKTOP").is_some_and(|d| d.eq_ignore_ascii_case("gamescope"))
 }
 
+/// Mirrors winit's backend choice: Wayland whenever a Wayland display or socket is
+/// present, else X11. (The session-type variable is not consulted, as winit ignores it.)
+pub fn is_native_wayland(get: impl Fn(&str) -> Option<String>) -> bool {
+    let set = |key: &str| get(key).is_some_and(|v| !v.is_empty());
+    set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET")
+}
+
+/// Minimize hands the screen to the game on the Deck. Native Wayland has no request for an
+/// app to un-minimize itself, so there the launcher stays put and the compositor brings it
+/// back when the game's window closes.
+pub fn should_minimize_on_launch(deck_like: bool, native_wayland: bool) -> bool {
+    deck_like && !native_wayland
+}
+
 pub fn default_ui_scale(deck_like: bool) -> f32 {
     if deck_like { 1.25 } else { 1.0 }
 }

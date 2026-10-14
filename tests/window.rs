@@ -1,5 +1,8 @@
 use dlsite_launcher::settings::Settings;
-use dlsite_launcher::window::{default_ui_scale, initial_fullscreen, is_deck_like, next_scale};
+use dlsite_launcher::window::{
+    default_ui_scale, initial_fullscreen, is_deck_like, is_native_wayland, next_scale,
+    should_minimize_on_launch,
+};
 use std::collections::HashMap;
 
 fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -169,5 +172,53 @@ mod restore {
         assert_eq!(requests, 6);
         assert!(done);
         assert_eq!(r.poll(30_000, true), RestoreStep::Idle);
+    }
+}
+
+mod wayland {
+    use super::*;
+
+    #[test]
+    fn a_wayland_display_means_native_wayland() {
+        assert!(is_native_wayland(env(&[("WAYLAND_DISPLAY", "wayland-0")])));
+        assert!(
+            is_native_wayland(env(&[("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":0")])),
+            "winit prefers Wayland when both are present"
+        );
+    }
+
+    #[test]
+    fn a_wayland_socket_also_counts() {
+        assert!(is_native_wayland(env(&[("WAYLAND_SOCKET", "3")])));
+    }
+
+    #[test]
+    fn x11_only_or_empty_values_are_not_native_wayland() {
+        assert!(!is_native_wayland(env(&[("DISPLAY", ":0")])));
+        assert!(!is_native_wayland(env(&[])));
+        assert!(!is_native_wayland(env(&[("WAYLAND_DISPLAY", "")])));
+    }
+
+    #[test]
+    fn a_session_type_alone_does_not_decide_it() {
+        // winit looks at the display variables, so a stale session type must not mislead us.
+        assert!(!is_native_wayland(env(&[
+            ("XDG_SESSION_TYPE", "wayland"),
+            ("DISPLAY", ":0")
+        ])));
+    }
+
+    #[test]
+    fn minimize_on_launch_only_on_the_deck_and_never_on_native_wayland() {
+        assert!(
+            should_minimize_on_launch(true, false),
+            "Deck on X11 / Xwayland"
+        );
+        assert!(
+            !should_minimize_on_launch(true, true),
+            "Wayland cannot un-minimize"
+        );
+        assert!(!should_minimize_on_launch(false, false), "plain desktop");
+        assert!(!should_minimize_on_launch(false, true));
     }
 }

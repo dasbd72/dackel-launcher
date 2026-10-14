@@ -64,7 +64,7 @@ const TILE_WIDTH: f32 = 200.0;
 struct Startup {
     settings: Settings,
     settings_path: Option<PathBuf>,
-    deck_like: bool,
+    minimize_on_launch: bool,
     fullscreen: bool,
     scale: f32,
 }
@@ -79,6 +79,7 @@ impl Startup {
             .map(settings::load)
             .unwrap_or_default();
         let deck_like = window::is_deck_like(|key| std::env::var(key).ok());
+        let native_wayland = window::is_native_wayland(|key| std::env::var(key).ok());
         Startup {
             fullscreen: window::initial_fullscreen(&settings, deck_like),
             scale: settings
@@ -86,7 +87,7 @@ impl Startup {
                 .unwrap_or_else(|| window::default_ui_scale(deck_like)),
             settings,
             settings_path,
-            deck_like,
+            minimize_on_launch: window::should_minimize_on_launch(deck_like, native_wayland),
         }
     }
 }
@@ -180,7 +181,7 @@ struct App {
     scroll_to_focus: bool,
     settings: Settings,
     settings_path: Option<PathBuf>,
-    deck_like: bool,
+    minimize_on_launch: bool,
     fullscreen: bool,
     scale: f32,
     /// Window changes decided in `apply`, sent to egui at the end of the frame.
@@ -222,7 +223,7 @@ impl App {
             scroll_to_focus: false,
             settings: startup.settings,
             settings_path: startup.settings_path,
-            deck_like: startup.deck_like,
+            minimize_on_launch: startup.minimize_on_launch,
             fullscreen: startup.fullscreen,
             scale: startup.scale,
             window_cmds: Vec::new(),
@@ -323,7 +324,7 @@ impl App {
                     .start(&entry.game.dir, state, proton.as_deref(), unix_now())
                 {
                     Ok(()) => {
-                        if self.deck_like {
+                        if self.minimize_on_launch {
                             // Hand the screen to the game; minimize rather than close.
                             self.window_cmds
                                 .push(egui::ViewportCommand::Minimized(true));
