@@ -23,14 +23,31 @@ fn plan_runs_umu_on_the_exe_from_its_own_folder_with_the_game_prefix() {
 }
 
 #[test]
-fn gameid_is_umu_plus_the_exe_file_name_alphanumerics() {
+fn gameid_is_umu_plus_the_rj_code() {
     let game = Path::new("/library/RJ123456");
 
     let p = plan(game, Path::new("bin/My-Game_v2.exe"), None);
 
     assert_eq!(
         p.env.get("GAMEID").map(String::as_str),
-        Some("umu-MyGamev2exe")
+        Some("umu-RJ123456")
+    );
+}
+
+#[test]
+fn gameid_ignores_the_exe_name_so_games_sharing_an_exe_do_not_collide() {
+    let a = plan(Path::new("/library/RJ111111"), Path::new("Game.exe"), None);
+    let b = plan(Path::new("/library/RJ222222"), Path::new("Game.exe"), None);
+    let garbled = plan(
+        Path::new("/library/RJ297317"),
+        Path::new("\u{e9}\u{f3}\u{e9}\u{3b1}.exe"),
+        None,
+    );
+
+    assert_ne!(a.env.get("GAMEID"), b.env.get("GAMEID"));
+    assert_eq!(
+        garbled.env.get("GAMEID").map(String::as_str),
+        Some("umu-RJ297317")
     );
 }
 

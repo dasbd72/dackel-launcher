@@ -28,7 +28,7 @@ pub fn plan(game_dir: &Path, exe_rel: &Path, proton: Option<&Path>) -> LaunchPla
     );
     env.insert("LANG".to_owned(), "ja_JP.UTF-8".to_owned());
     env.insert("LC_ALL".to_owned(), "ja_JP.UTF-8".to_owned());
-    env.insert("GAMEID".to_owned(), game_id(&exe));
+    env.insert("GAMEID".to_owned(), game_id(game_dir));
     if let Some(proton) = proton {
         env.insert("PROTONPATH".to_owned(), proton.display().to_string());
     }
@@ -43,13 +43,10 @@ pub fn plan(game_dir: &Path, exe_rel: &Path, proton: Option<&Path>) -> LaunchPla
 }
 
 /// `umu-` followed by the exe file name with only alphanumerics kept.
-fn game_id(exe: &Path) -> String {
-    let name = exe
-        .file_name()
-        .map(|n| n.to_string_lossy())
-        .unwrap_or_default();
-    let kept: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    format!("umu-{kept}")
+/// `umu-<RJ code>`: unique per game, unlike an exe-name id (many games ship `Game.exe`).
+fn game_id(game_dir: &Path) -> String {
+    let code = game_dir.file_name().map(|n| n.to_string_lossy());
+    format!("umu-{}", code.as_deref().unwrap_or_default())
 }
 
 /// Starts a process from a plan. The only seam that touches the system.
