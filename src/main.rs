@@ -20,7 +20,7 @@ use dlsite_launcher::reload::Reloads;
 use dlsite_launcher::settings::{self, Settings};
 use dlsite_launcher::window::{self, Restore, RestoreStep};
 use eframe::egui;
-use focus::{FocusFrame, Target, bounds};
+use focus::{FocusFrame, Item, Target, bounds};
 use gilrs::{Axis, Button, EventType, Gilrs};
 use icons::{Icon, icon_button};
 use std::collections::{HashMap, HashSet};
@@ -198,11 +198,21 @@ enum View {
 }
 
 /// A small list opened from a toolbar dropdown so the controller can choose from it.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Picker {
     Sort,
     Encoding,
     Scale,
+}
+
+const SORTS: [Sort; 3] = [Sort::LastPlayed, Sort::Title, Sort::DateAdded];
+const ENCODINGS: [Encoding; 3] = [Encoding::Auto, Encoding::Cp932, Encoding::Utf8];
+
+/// What a dropdown popup shows: its title, its entries, and which one is current.
+struct PickerList {
+    title: &'static str,
+    labels: Vec<String>,
+    current: usize,
 }
 
 struct App {
@@ -224,13 +234,13 @@ struct App {
     focus_id: Option<String>,
     /// True until the user moves the cursor: it then tracks the first game as the list re-sorts.
     focus_auto: bool,
-    chooser_sel: usize,
+    list_sel: usize,
     /// Set when focus is on a toolbar or details-page control instead of a game tile.
     control_focus: Option<Control>,
     /// Where everything focusable was on the last frame; D-pad moves use it.
-    nav_items: Vec<(Target, egui::Rect)>,
+    nav_items: Vec<Item>,
     /// A control the controller pressed with A, consumed by that control next frame.
-    activate: Option<Control>,
+    pending_press: Option<Control>,
     picker: Option<Picker>,
     scroll_to_focus: bool,
     settings: Settings,
@@ -277,10 +287,10 @@ impl App {
             stick: Repeater::default(),
             focus_id: None,
             focus_auto: true,
-            chooser_sel: 0,
+            list_sel: 0,
             control_focus: None,
             nav_items: Vec::new(),
-            activate: None,
+            pending_press: None,
             picker: None,
             scroll_to_focus: false,
             settings: startup.settings,
@@ -571,49 +581,55 @@ impl App {
         self.scroll_to_focus = true;
     }
 
-    /// The title, the labels and the current choice of a toolbar dropdown.
-    fn picker_options(&self, picker: Picker) -> (&'static str, Vec<String>, usize) {
+    fn picker_list(&self, picker: Picker) -> PickerList {
         match picker {
-            Picker::Sort => {
-                let all = [Sort::LastPlayed, Sort::Title, Sort::DateAdded];
-                let labels = all.iter().map(|s| sort_label(*s).to_owned()).collect();
-                let at = all.iter().position(|s| *s == self.query.sort).unwrap_or(0);
-                ("Sort", labels, at)
-            }
-            Picker::Encoding => {
-                let all = [Encoding::Auto, Encoding::Cp932, Encoding::Utf8];
-                let labels = all.iter().map(|e| encoding_label(*e).to_owned()).collect();
-                let at = all.iter().position(|e| *e == self.encoding).unwrap_or(0);
-                ("Zip encoding", labels, at)
-            }
-            Picker::Scale => {
-                let labels = window::SCALE_PRESETS
+            Picker::Sort => PickerList {
+                title: "Sort",
+                labels: SORTS.iter().map(|s| sort_label(*s).to_owned()).collect(),
+                current: SORTS
+                    .iter()
+                    .position(|s| *s == self.query.sort)
+                    .unwrap_or(0),
+            },
+            Picker::Encoding => PickerList {
+                title: "Zip encoding",
+                labels: ENCODINGS
+                    .iter()
+                    .map(|e| encoding_label(*e).to_owned())
+                    .collect(),
+                current: ENCODINGS
+                    .iter()
+                    .position(|e| *e == self.encoding)
+                    .unwrap_or(0),
+            },
+            Picker::Scale => PickerList {
+                title: "UI scale",
+                labels: window::SCALE_PRESETS
                     .iter()
                     .map(|p| format!("{p:.2}"))
-                    .collect();
-                let at = window::SCALE_PRESETS
+                    .collect(),
+                current: window::SCALE_PRESETS
                     .iter()
                     .position(|p| (self.scale - p).abs() < 1e-3)
-                    .unwrap_or(0);
-                ("UI scale", labels, at)
-            }
+                    .unwrap_or(0),
+            },
         }
     }
 
     fn open_picker(&mut self, picker: Picker) {
-        self.chooser_sel = self.picker_options(picker).2;
+        self.list_sel = self.picker_list(picker).current;
         self.picker = Some(picker);
     }
 
     fn pick(&mut self, picker: Picker, index: usize) {
         match picker {
             Picker::Sort => {
-                if let Some(sort) = [Sort::LastPlayed, Sort::Title, Sort::DateAdded].get(index) {
+                if let Some(sort) = SORTS.get(index) {
                     self.query.sort = *sort;
                 }
             }
             Picker::Encoding => {
-                if let Some(e) = [Encoding::Auto, Encoding::Cp932, Encoding::Utf8].get(index) {
+                if let Some(e) = ENCODINGS.get(index) {
                     self.encoding = *e;
                 }
             }
@@ -627,9 +643,8 @@ impl App {
 
     /// Keeps controller focus on something that exists on the current screen.
     fn normalize_control_focus(&mut self) {
-        let on_screen = |c: Control, items: &[(Target, egui::Rect)]| {
-            items.iter().any(|(t, _)| *t == Target::Control(c))
-        };
+        let on_screen =
+            |c: Control, items: &[Item]| items.iter().any(|i| i.target == Target::Control(c));
         match (&self.screen, self.control_focus) {
             // `nav_items` is still the previous screen's layout until the details page has
             // been drawn once (its Back button is the first thing it registers).
@@ -645,7 +660,7 @@ impl App {
 
     fn open_chooser(&mut self, index: usize) {
         self.chooser = Some(index);
-        self.chooser_sel = 0;
+        self.list_sel = 0;
     }
 
     fn apply(&mut self, command: Command) {
@@ -658,7 +673,7 @@ impl App {
                         Control::Sort => self.open_picker(Picker::Sort),
                         Control::Encoding => self.open_picker(Picker::Encoding),
                         Control::Scale => self.open_picker(Picker::Scale),
-                        other => self.activate = Some(other),
+                        other => self.pending_press = Some(other),
                     }
                     return;
                 }
@@ -716,7 +731,7 @@ impl App {
             }
             Command::ChooserMove(delta) => {
                 let len = match self.picker {
-                    Some(picker) => self.picker_options(picker).1.len(),
+                    Some(picker) => self.picker_list(picker).labels.len(),
                     None => match &self.view {
                         View::Games(entries) => self
                             .chooser
@@ -726,22 +741,18 @@ impl App {
                     },
                 };
                 let last = len.saturating_sub(1) as i64;
-                self.chooser_sel =
-                    (self.chooser_sel as i64 + i64::from(delta)).clamp(0, last) as usize;
+                self.list_sel = (self.list_sel as i64 + i64::from(delta)).clamp(0, last) as usize;
             }
             Command::ChooserPick => {
                 if let Some(picker) = self.picker.take() {
-                    self.pick(picker, self.chooser_sel);
+                    self.pick(picker, self.list_sel);
                     return;
                 }
                 let View::Games(entries) = &self.view else {
                     return;
                 };
                 let picked = self.chooser.and_then(|i| entries.get(i)).and_then(|e| {
-                    Some((
-                        e.game.dir.clone(),
-                        e.candidates.get(self.chooser_sel)?.clone(),
-                    ))
+                    Some((e.game.dir.clone(), e.candidates.get(self.list_sel)?.clone()))
                 });
                 if let Some((dir, exe)) = picked {
                     match profile::choose(&dir, &exe) {
@@ -766,12 +777,12 @@ impl App {
             (None, Some(id)) => Target::Game(id.clone()),
             (None, None) => return,
         };
-        let Some(from) = self.nav_items.iter().position(|(t, _)| *t == current) else {
+        let Some(from) = self.nav_items.iter().position(|i| i.target == current) else {
             return;
         };
-        let rects: Vec<nav::Bounds> = self.nav_items.iter().map(|(_, r)| bounds(*r)).collect();
+        let rects: Vec<nav::Bounds> = self.nav_items.iter().map(|i| bounds(i.rect)).collect();
         let to = nav::spatial_next(&rects, from, dir);
-        match self.nav_items[to].0.clone() {
+        match self.nav_items[to].target.clone() {
             Target::Game(id) => {
                 self.focus_id = Some(id);
                 self.control_focus = None;
@@ -882,7 +893,7 @@ impl eframe::App for App {
         let visible = self.visible();
         self.normalize_focus(&visible);
         self.normalize_control_focus();
-        let mut frame = FocusFrame::new(self.control_focus, self.activate.take());
+        let mut frame = FocusFrame::new(self.control_focus, self.pending_press.take());
         // Apply a requested zoom; otherwise notice egui's own Ctrl +/- zoom and remember it.
         if let Some(zoom) = self.zoom_request.take() {
             ctx.set_zoom_factor(zoom);
@@ -944,7 +955,7 @@ impl eframe::App for App {
                 let response = egui::ComboBox::from_id_salt("zip-encoding")
                     .selected_text(encoding_label(self.encoding))
                     .show_ui(ui, |ui| {
-                        for choice in [Encoding::Auto, Encoding::Cp932, Encoding::Utf8] {
+                        for choice in ENCODINGS {
                             ui.selectable_value(&mut self.encoding, choice, encoding_label(choice));
                         }
                     })
@@ -958,7 +969,7 @@ impl eframe::App for App {
                     let response = egui::ComboBox::from_id_salt("sort")
                         .selected_text(sort_label(self.query.sort))
                         .show_ui(ui, |ui| {
-                            for sort in [Sort::LastPlayed, Sort::Title, Sort::DateAdded] {
+                            for sort in SORTS {
                                 ui.selectable_value(&mut self.query.sort, sort, sort_label(sort));
                             }
                         })
@@ -1109,9 +1120,10 @@ impl eframe::App for App {
                                         cover_view,
                                     };
                                     let action = tile_ui(ui, &tile);
-                                    frame
-                                        .items
-                                        .push((Target::Game(entry.game.id.clone()), action.rect));
+                                    frame.items.push(Item {
+                                        target: Target::Game(entry.game.id.clone()),
+                                        rect: action.rect,
+                                    });
                                     if tile.focused && self.scroll_to_focus {
                                         ui.scroll_to_rect(action.rect.expand(8.0), None);
                                     }
@@ -1160,7 +1172,7 @@ impl eframe::App for App {
                         ui.label("No exe found in this folder.");
                     }
                     if let Some(candidate) =
-                        exe_choices(ui, &entry.candidates, Some(self.chooser_sel), None)
+                        exe_choices(ui, &entry.candidates, Some(self.list_sel), None)
                     {
                         choice = Some((entry.game.dir.clone(), candidate));
                     }
@@ -1171,43 +1183,12 @@ impl eframe::App for App {
         }
 
         if let Some(picker) = self.picker {
-            let (title, labels, _) = self.picker_options(picker);
-            // No title bar: its width is computed separately from the content and would not
-            // match the entries. The title is a heading inside the box instead.
-            egui::Window::new(title)
-                .title_bar(false)
-                .resizable(false)
-                .auto_sized()
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ui.ctx(), |ui| {
-                    let measure = |ui: &egui::Ui, text: &str, style: egui::TextStyle| {
-                        let font = style.resolve(ui.style());
-                        ui.painter()
-                            .layout_no_wrap(text.to_owned(), font, egui::Color32::WHITE)
-                            .size()
-                            .x
-                    };
-                    let items = labels
-                        .iter()
-                        .map(String::as_str)
-                        .chain(["Cancel"])
-                        .map(|text| measure(ui, text, egui::TextStyle::Button))
-                        .fold(0.0, f32::max)
-                        + 2.0 * ui.spacing().button_padding.x;
-                    ui.set_width(items.max(measure(ui, title, egui::TextStyle::Heading)));
-                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
-                        ui.heading(title);
-                        ui.separator();
-                        for (i, label) in labels.iter().enumerate() {
-                            if ui.selectable_label(i == self.chooser_sel, label).clicked() {
-                                picker_pick = Some((picker, i));
-                            }
-                        }
-                        if ui.button("Cancel").clicked() {
-                            picker_cancel = true;
-                        }
-                    });
-                });
+            let list = self.picker_list(picker);
+            match picker_window(ui.ctx(), &list, self.list_sel) {
+                Some(PickerEvent::Pick(i)) => picker_pick = Some((picker, i)),
+                Some(PickerEvent::Cancel) => picker_cancel = true,
+                None => {}
+            }
         }
 
         self.nav_items = std::mem::take(&mut frame.items);
@@ -1511,4 +1492,52 @@ fn dir_input(dir: nav::Dir) -> Input {
         nav::Dir::Left => Input::Left,
         nav::Dir::Right => Input::Right,
     }
+}
+
+enum PickerEvent {
+    Pick(usize),
+    Cancel,
+}
+
+/// The dropdown popup. It has no title bar: that bar's width is worked out apart from the
+/// content and would not match the entries, so the title is a heading inside the box and
+/// the box is as wide as its widest text.
+fn picker_window(ctx: &egui::Context, list: &PickerList, selected: usize) -> Option<PickerEvent> {
+    let mut event = None;
+    egui::Window::new(list.title)
+        .title_bar(false)
+        .resizable(false)
+        .auto_sized()
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            let measure = |ui: &egui::Ui, text: &str, style: egui::TextStyle| {
+                let font = style.resolve(ui.style());
+                ui.painter()
+                    .layout_no_wrap(text.to_owned(), font, egui::Color32::WHITE)
+                    .size()
+                    .x
+            };
+            let entries = list
+                .labels
+                .iter()
+                .map(String::as_str)
+                .chain(["Cancel"])
+                .map(|text| measure(ui, text, egui::TextStyle::Button))
+                .fold(0.0, f32::max)
+                + 2.0 * ui.spacing().button_padding.x;
+            ui.set_width(entries.max(measure(ui, list.title, egui::TextStyle::Heading)));
+            ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                ui.heading(list.title);
+                ui.separator();
+                for (i, label) in list.labels.iter().enumerate() {
+                    if ui.selectable_label(i == selected, label).clicked() {
+                        event = Some(PickerEvent::Pick(i));
+                    }
+                }
+                if ui.button("Cancel").clicked() {
+                    event = Some(PickerEvent::Cancel);
+                }
+            });
+        });
+    event
 }

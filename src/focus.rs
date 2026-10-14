@@ -13,40 +13,52 @@ use eframe::egui::{Color32, Rect, Response, Stroke, StrokeKind, Ui};
 pub enum Target {
     /// A game tile in the library grid, by game id.
     Game(String),
+    /// A toolbar or details-page control.
     Control(Control),
 }
 
 const RING: Color32 = Color32::from_rgb(90, 170, 255);
+const RING_WIDTH: f32 = 3.0;
+const RING_RADIUS: f32 = 6.0;
+
+/// A focusable widget and where it was drawn.
+pub struct Item {
+    pub target: Target,
+    pub rect: Rect,
+}
 
 /// What one frame learned about focus.
 pub struct FocusFrame {
     /// The control that has focus, if focus is on a control rather than a game tile.
-    pub focused: Option<Control>,
+    pub focused_control: Option<Control>,
     /// A control the controller pressed with A this frame.
-    pub activate: Option<Control>,
+    pub pending_press: Option<Control>,
     /// Every focusable widget drawn this frame.
-    pub items: Vec<(Target, Rect)>,
+    pub items: Vec<Item>,
 }
 
 impl FocusFrame {
-    pub fn new(focused: Option<Control>, activate: Option<Control>) -> Self {
+    pub fn new(focused_control: Option<Control>, pending_press: Option<Control>) -> Self {
         FocusFrame {
-            focused,
-            activate,
+            focused_control,
+            pending_press,
             items: Vec::new(),
         }
     }
 
     /// Registers a control and draws the focus ring if it has focus.
     pub fn register(&mut self, ui: &Ui, id: Control, response: &Response) {
-        self.items.push((Target::Control(id), response.rect));
-        if self.focused == Some(id) {
+        self.items.push(Item {
+            target: Target::Control(id),
+            rect: response.rect,
+        });
+        if self.focused_control == Some(id) {
             // Drawn inside the control's own rectangle, so it never reaches a neighbor and
             // does not change the layout.
             ui.painter().rect_stroke(
                 response.rect,
-                6.0,
-                Stroke::new(3.0, RING),
+                RING_RADIUS,
+                Stroke::new(RING_WIDTH, RING),
                 StrokeKind::Inside,
             );
         }
@@ -56,16 +68,17 @@ impl FocusFrame {
     /// focused (and `enabled`).
     pub fn pressed(&mut self, ui: &Ui, id: Control, response: &Response, enabled: bool) -> bool {
         self.register(ui, id, response);
-        response.clicked() || (enabled && self.activate == Some(id))
+        response.clicked() || (enabled && self.pending_press == Some(id))
     }
 
     /// True when the controller pressed A on this control. For toggles and checkboxes whose
     /// widget has already handled mouse clicks itself.
     pub fn activated(&self, id: Control) -> bool {
-        self.activate == Some(id)
+        self.pending_press == Some(id)
     }
 }
 
+/// The rectangle in the plain form `nav::spatial_next` works on.
 pub fn bounds(rect: Rect) -> Bounds {
     Bounds {
         left: rect.left(),

@@ -238,20 +238,19 @@ pub fn details_ui(ui: &mut egui::Ui, view: &DetailsView, frame: &mut FocusFrame)
                         Err(msg) => {
                             ui.colored_label(egui::Color32::LIGHT_RED, msg);
                         }
-                        Ok(Status::NotExtracted) => {
-                            let response = ui.button("Extract");
+                        Ok(Status::NotExtracted) | Ok(Status::Ready { has_zip: true }) => {
+                            let label = if matches!(view.extract, Ok(Status::NotExtracted)) {
+                                "Extract"
+                            } else {
+                                "Re-extract"
+                            };
+                            let response = ui.button(label);
                             if frame.pressed(ui, Control::Extract, &response, true) {
                                 action.extract = true;
                             }
                         }
                         Ok(Status::ExtractManually(_)) => {
                             ui.colored_label(egui::Color32::YELLOW, "extract manually");
-                        }
-                        Ok(Status::Ready { has_zip: true }) => {
-                            let response = ui.button("Re-extract");
-                            if frame.pressed(ui, Control::Extract, &response, true) {
-                                action.extract = true;
-                            }
                         }
                         Ok(Status::Ready { has_zip: false }) => {}
                     }
