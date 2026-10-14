@@ -35,11 +35,18 @@ pub struct FocusFrame {
     pub pending_press: Option<Control>,
     /// Every focusable widget drawn this frame.
     pub items: Vec<Item>,
+    /// Scroll the focused control into view (focus just moved).
+    scroll_to_focus: bool,
 }
 
 impl FocusFrame {
-    pub fn new(focused_control: Option<Control>, pending_press: Option<Control>) -> Self {
+    pub fn new(
+        focused_control: Option<Control>,
+        pending_press: Option<Control>,
+        scroll_to_focus: bool,
+    ) -> Self {
         FocusFrame {
+            scroll_to_focus,
             focused_control,
             pending_press,
             items: Vec::new(),
@@ -53,6 +60,9 @@ impl FocusFrame {
             rect: response.rect,
         });
         if self.focused_control == Some(id) {
+            if self.scroll_to_focus {
+                ui.scroll_to_rect(response.rect.expand(8.0), None);
+            }
             // Drawn inside the control's own rectangle, so it never reaches a neighbor and
             // does not change the layout.
             ui.painter().rect_stroke(

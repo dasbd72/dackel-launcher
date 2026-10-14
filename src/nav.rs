@@ -131,6 +131,15 @@ pub fn stick_dir(x: f32, y: f32) -> Option<Dir> {
     })
 }
 
+/// How fast the stick asks a page to scroll, from -1.0 (down, full speed) to 1.0 (up, full
+/// speed). Zero inside the dead zone and when the push is mostly sideways.
+pub fn stick_scroll(x: f32, y: f32) -> f32 {
+    if y.abs() < STICK_DEAD_ZONE || x.abs() > y.abs() {
+        return 0.0;
+    }
+    y.signum() * ((y.abs() - STICK_DEAD_ZONE) / (1.0 - STICK_DEAD_ZONE)).min(1.0)
+}
+
 /// Key-repeat for a held direction: fires at once, then after a delay, then steadily.
 #[derive(Debug, Default)]
 pub struct Repeater {

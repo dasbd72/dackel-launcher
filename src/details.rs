@@ -118,6 +118,7 @@ pub fn details_ui(
     view: &DetailsView,
     frame: &mut FocusFrame,
     edit: &mut TuningEdit,
+    scroll: &mut f32,
 ) -> DetailsAction {
     let mut action = DetailsAction::default();
     let title = view.info.map_or(view.id, |info| info.title.as_str());
@@ -135,210 +136,216 @@ pub fn details_ui(
     });
     ui.separator();
 
-    ui.horizontal_top(|ui| {
-        // The cover takes the height its own aspect ratio gives it: no empty bands.
-        match (&view.cover_view, view.cover.as_ref()) {
-            // Blur is on: only ever the blurred copy, or an empty box while it is made.
-            (CoverView::Blurred(texture), _) => {
-                let aspect = texture
-                    .as_ref()
-                    .map_or(0.75, |t| t.size_vec2().y / t.size_vec2().x);
-                let size = egui::vec2(COVER_WIDTH, COVER_WIDTH * aspect);
-                match texture {
-                    Some(texture) => {
+    // Everything below the header scrolls as one page, so a tall form never hides the rest.
+    // The offset lives with the caller, so the left stick can scroll the page too.
+    let scrolled = egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .vertical_scroll_offset(*scroll)
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                // The cover takes the height its own aspect ratio gives it: no empty bands.
+                match (&view.cover_view, view.cover.as_ref()) {
+                    // Blur is on: only ever the blurred copy, or an empty box while it is made.
+                    (CoverView::Blurred(texture), _) => {
+                        let aspect = texture
+                            .as_ref()
+                            .map_or(0.75, |t| t.size_vec2().y / t.size_vec2().x);
+                        let size = egui::vec2(COVER_WIDTH, COVER_WIDTH * aspect);
+                        match texture {
+                            Some(texture) => {
+                                ui.add(
+                                    egui::Image::new(texture)
+                                        .fit_to_exact_size(size)
+                                        .corner_radius(6.0),
+                                );
+                            }
+                            None => {
+                                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                                ui.painter()
+                                    .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
+                            }
+                        }
+                    }
+                    (CoverView::Normal, Some(path)) => {
+                        let uri = format!("file://{}", path.display());
                         ui.add(
-                            egui::Image::new(texture)
-                                .fit_to_exact_size(size)
+                            egui::Image::new(uri)
+                                .max_width(COVER_WIDTH)
                                 .corner_radius(6.0),
                         );
                     }
-                    None => {
-                        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                    (CoverView::Normal, None) => {
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(COVER_WIDTH, COVER_WIDTH * 0.75),
+                            egui::Sense::hover(),
+                        );
                         ui.painter()
                             .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "No cover",
+                            egui::FontId::proportional(16.0),
+                            ui.visuals().weak_text_color(),
+                        );
                     }
                 }
-            }
-            (CoverView::Normal, Some(path)) => {
-                let uri = format!("file://{}", path.display());
-                ui.add(
-                    egui::Image::new(uri)
-                        .max_width(COVER_WIDTH)
-                        .corner_radius(6.0),
-                );
-            }
-            (CoverView::Normal, None) => {
-                let (rect, _) = ui.allocate_exact_size(
-                    egui::vec2(COVER_WIDTH, COVER_WIDTH * 0.75),
-                    egui::Sense::hover(),
-                );
-                ui.painter()
-                    .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "No cover",
-                    egui::FontId::proportional(16.0),
-                    ui.visuals().weak_text_color(),
-                );
-            }
-        }
 
-        ui.vertical(|ui| {
-            // Two columns, so every label lines up and so does every value.
-            egui::Grid::new("details-info")
-                .num_columns(2)
-                .spacing([16.0, 6.0])
-                .show(ui, |ui| {
-                    let chip_pad = f32::from(CHIP_PAD_Y);
+                ui.vertical(|ui| {
+                    // Two columns, so every label lines up and so does every value.
+                    egui::Grid::new("details-info")
+                        .num_columns(2)
+                        .spacing([16.0, 6.0])
+                        .show(ui, |ui| {
+                            let chip_pad = f32::from(CHIP_PAD_Y);
 
-                    if let Some(library) = &view.library {
-                        row_label(ui, "Library", 0.0);
-                        ui.label(library);
-                        ui.end_row();
-                    }
+                            if let Some(library) = &view.library {
+                                row_label(ui, "Library", 0.0);
+                                ui.label(library);
+                                ui.end_row();
+                            }
 
-                    row_label(ui, "Circle", chip_pad);
-                    match view.info.and_then(|i| i.circle.as_deref()) {
-                        Some(circle) => chip(ui, circle),
-                        None => {
-                            ui.weak("--");
-                        }
-                    }
-                    ui.end_row();
+                            row_label(ui, "Circle", chip_pad);
+                            match view.info.and_then(|i| i.circle.as_deref()) {
+                                Some(circle) => chip(ui, circle),
+                                None => {
+                                    ui.weak("--");
+                                }
+                            }
+                            ui.end_row();
 
-                    row_label(ui, "Tags", chip_pad);
-                    ui.horizontal_wrapped(|ui| {
-                        let genres = view.info.map(|i| i.genres.as_slice()).unwrap_or(&[]);
-                        if genres.is_empty() {
-                            ui.weak("--");
-                        }
-                        for genre in genres {
-                            chip(ui, genre);
-                        }
-                    });
-                    ui.end_row();
+                            row_label(ui, "Tags", chip_pad);
+                            ui.horizontal_wrapped(|ui| {
+                                let genres = view.info.map(|i| i.genres.as_slice()).unwrap_or(&[]);
+                                if genres.is_empty() {
+                                    ui.weak("--");
+                                }
+                                for genre in genres {
+                                    chip(ui, genre);
+                                }
+                            });
+                            ui.end_row();
 
-                    row_label(ui, "Play time", 0.0);
-                    ui.label(format_play_time(view.stats.play_time_secs));
-                    ui.end_row();
+                            row_label(ui, "Play time", 0.0);
+                            ui.label(format_play_time(view.stats.play_time_secs));
+                            ui.end_row();
 
-                    row_label(ui, "Exe", 0.0);
-                    match view.exe {
-                        Some(exe) => {
-                            ui.label(exe.display().to_string());
-                        }
-                        None => {
-                            ui.weak("not chosen");
-                        }
-                    }
-                    ui.end_row();
+                            row_label(ui, "Exe", 0.0);
+                            match view.exe {
+                                Some(exe) => {
+                                    ui.label(exe.display().to_string());
+                                }
+                                None => {
+                                    ui.weak("not chosen");
+                                }
+                            }
+                            ui.end_row();
 
-                    if !view.candidates.is_empty() {
-                        row_label(ui, "Choose exe", 0.0);
-                        ui.vertical(|ui| {
-                            action.choose_exe =
-                                exe_choices(ui, view.candidates, None, Some(&mut *frame));
+                            if !view.candidates.is_empty() {
+                                row_label(ui, "Choose exe", 0.0);
+                                ui.vertical(|ui| {
+                                    action.choose_exe =
+                                        exe_choices(ui, view.candidates, None, Some(&mut *frame));
+                                });
+                                ui.end_row();
+                            }
                         });
-                        ui.end_row();
-                    }
-                });
 
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if let Some(progress) = view.extracting {
-                    let pct = progress.fraction() * 100.0;
-                    ui.add(
-                        egui::ProgressBar::new(progress.fraction())
-                            .desired_width(340.0)
-                            .desired_height(crate::icons::BUTTON_HEIGHT)
-                            .text(format!(
-                                "Extracting {pct:.0}%  ({} / {} files)",
-                                progress.files_done, progress.files_total
-                            )),
-                    );
-                    let response = icon_text_button(ui, Icon::Close, "Cancel", true);
-                    if frame.pressed(ui, Control::CancelExtract, &response, true) {
-                        action.cancel_extract = true;
-                    }
-                } else {
-                    if view.running {
-                        ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
-                    } else {
-                        let ready = view.exe.is_some();
-                        let response = icon_text_button(ui, Icon::Play, "Launch", ready);
-                        if frame.pressed(ui, Control::Launch, &response, ready) {
-                            action.launch = true;
-                        }
-                    }
-                    let label = if view.busy {
-                        "Reloading..."
-                    } else {
-                        "Reload info"
-                    };
-                    let response = ui.add_enabled(!view.busy, egui::Button::new(label));
-                    if frame.pressed(ui, Control::ReloadInfo, &response, !view.busy) {
-                        action.reload = true;
-                    }
-                    match view.extract {
-                        Err(msg) => {
-                            ui.colored_label(egui::Color32::LIGHT_RED, msg);
-                        }
-                        Ok(Status::NotExtracted) | Ok(Status::Ready { has_zip: true }) => {
-                            let label = if matches!(view.extract, Ok(Status::NotExtracted)) {
-                                "Extract"
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if let Some(progress) = view.extracting {
+                            let pct = progress.fraction() * 100.0;
+                            ui.add(
+                                egui::ProgressBar::new(progress.fraction())
+                                    .desired_width(340.0)
+                                    .desired_height(crate::icons::BUTTON_HEIGHT)
+                                    .text(format!(
+                                        "Extracting {pct:.0}%  ({} / {} files)",
+                                        progress.files_done, progress.files_total
+                                    )),
+                            );
+                            let response = icon_text_button(ui, Icon::Close, "Cancel", true);
+                            if frame.pressed(ui, Control::CancelExtract, &response, true) {
+                                action.cancel_extract = true;
+                            }
+                        } else {
+                            if view.running {
+                                ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
                             } else {
-                                "Re-extract"
+                                let ready = view.exe.is_some();
+                                let response = icon_text_button(ui, Icon::Play, "Launch", ready);
+                                if frame.pressed(ui, Control::Launch, &response, ready) {
+                                    action.launch = true;
+                                }
+                            }
+                            let label = if view.busy {
+                                "Reloading..."
+                            } else {
+                                "Reload info"
                             };
-                            let response = ui.button(label);
-                            if frame.pressed(ui, Control::Extract, &response, true) {
-                                action.extract = true;
+                            let response = ui.add_enabled(!view.busy, egui::Button::new(label));
+                            if frame.pressed(ui, Control::ReloadInfo, &response, !view.busy) {
+                                action.reload = true;
+                            }
+                            match view.extract {
+                                Err(msg) => {
+                                    ui.colored_label(egui::Color32::LIGHT_RED, msg);
+                                }
+                                Ok(Status::NotExtracted) | Ok(Status::Ready { has_zip: true }) => {
+                                    let label = if matches!(view.extract, Ok(Status::NotExtracted))
+                                    {
+                                        "Extract"
+                                    } else {
+                                        "Re-extract"
+                                    };
+                                    let response = ui.button(label);
+                                    if frame.pressed(ui, Control::Extract, &response, true) {
+                                        action.extract = true;
+                                    }
+                                }
+                                Ok(Status::ExtractManually(_)) => {
+                                    ui.colored_label(egui::Color32::YELLOW, "extract manually");
+                                }
+                                Ok(Status::Ready { has_zip: false }) => {}
                             }
                         }
-                        Ok(Status::ExtractManually(_)) => {
-                            ui.colored_label(egui::Color32::YELLOW, "extract manually");
+                        let favorite = view.stats.favorite;
+                        let label = if favorite { "Unfavorite" } else { "Favorite" };
+                        let response =
+                            icon_text_button(ui, Icon::Heart { filled: favorite }, label, true);
+                        if frame.pressed(ui, Control::Favorite, &response, true) {
+                            action.toggle_favorite = true;
                         }
-                        Ok(Status::Ready { has_zip: false }) => {}
+                    });
+                    if let Some(err) = view.error {
+                        ui.colored_label(egui::Color32::LIGHT_RED, err);
                     }
-                }
-                let favorite = view.stats.favorite;
-                let label = if favorite { "Unfavorite" } else { "Favorite" };
-                let response = icon_text_button(ui, Icon::Heart { filled: favorite }, label, true);
-                if frame.pressed(ui, Control::Favorite, &response, true) {
-                    action.toggle_favorite = true;
-                }
+                    launch_options(ui, view, edit, &mut action);
+                });
             });
-            if let Some(err) = view.error {
-                ui.colored_label(egui::Color32::LIGHT_RED, err);
-            }
-            launch_options(ui, view, edit, &mut action);
-        });
-    });
 
-    ui.separator();
-    match view.info {
-        None => {
-            ui.label("No info yet. Press Reload info to fetch it from DLsite.");
-        }
-        Some(info) => {
-            if !info.found {
-                ui.weak("No DLsite page was found for this work; showing the folder name.");
-            }
-            // A box as wide as the window; the text wraps to it.
-            egui::Frame::new()
-                .fill(ui.visuals().extreme_bg_color)
-                .corner_radius(6.0)
-                .inner_margin(egui::Margin::same(12))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
+            ui.separator();
+            match view.info {
+                None => {
+                    ui.label("No info yet. Press Reload info to fetch it from DLsite.");
+                }
+                Some(info) => {
+                    if !info.found {
+                        ui.weak("No DLsite page was found for this work; showing the folder name.");
+                    }
+                    // A box as wide as the window; the text wraps to it.
+                    egui::Frame::new()
+                        .fill(ui.visuals().extreme_bg_color)
+                        .corner_radius(6.0)
+                        .inner_margin(egui::Margin::same(12))
                         .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
                             ui.label(&info.description);
                         });
-                });
-        }
-    }
+                }
+            }
+        });
+    *scroll = scrolled.state.offset.y;
     action
 }
 

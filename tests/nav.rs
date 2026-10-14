@@ -138,6 +138,36 @@ mod stick {
     }
 }
 
+mod stick_scroll {
+    use dlsite_launcher::nav::stick_scroll;
+
+    #[test]
+    fn inside_the_dead_zone_nothing_scrolls() {
+        assert_eq!(stick_scroll(0.0, 0.0), 0.0);
+        assert_eq!(stick_scroll(0.1, 0.4), 0.0);
+    }
+
+    #[test]
+    fn pushing_up_scrolls_up_and_down_scrolls_down_at_full_speed_when_fully_pushed() {
+        assert_eq!(stick_scroll(0.0, 1.0), 1.0);
+        assert_eq!(stick_scroll(0.0, -1.0), -1.0);
+    }
+
+    #[test]
+    fn the_speed_grows_with_how_far_the_stick_is_pushed() {
+        let slow = stick_scroll(0.0, 0.6);
+        let fast = stick_scroll(0.0, 0.9);
+
+        assert!(0.0 < slow && slow < fast && fast < 1.0, "{slow} {fast}");
+    }
+
+    #[test]
+    fn a_mostly_sideways_push_does_not_scroll() {
+        assert_eq!(stick_scroll(0.9, 0.6), 0.0);
+        assert_eq!(stick_scroll(-0.9, -0.6), 0.0);
+    }
+}
+
 mod window_controls {
     use dlsite_launcher::nav::{Command, Context, Input, command};
 

@@ -86,6 +86,8 @@ fn main() -> eframe::Result {
     )
 }
 
+/// Points per second the details page scrolls with the stick pushed all the way.
+const PAD_SCROLL_SPEED: f32 = 900.0;
 const TILE_WIDTH: f32 = 200.0;
 
 const DEBOUNCE_HELP: &str = "Press debounce\n\
@@ -251,6 +253,10 @@ struct App {
     /// Show only games from this library.
     library_filter: Option<PathBuf>,
     libraries_open: bool,
+    /// How far down the details page is scrolled, in points.
+    details_scroll: f32,
+    /// What the left stick asks the details page to do this frame (-1.0 down .. 1.0 up).
+    pad_scroll: f32,
     /// Shown when a game's pinned Proton is not installed on this machine.
     proton_prompt: Option<ProtonPrompt>,
     /// The details page's Launch options form.
@@ -315,6 +321,8 @@ impl App {
             offline: Vec::new(),
             library_filter: None,
             libraries_open: false,
+            details_scroll: 0.0,
+            pad_scroll: 0.0,
             proton_prompt: None,
             tuning_edit: None,
             library_input: String::new(),
@@ -962,6 +970,7 @@ impl App {
     /// Opens the details page for a game; focus starts on its Launch button.
     fn open_details_page(&mut self, id: String) {
         self.screen = Screen::Details(id);
+        self.details_scroll = 0.0;
         self.control_focus = Some(Control::Launch);
     }
 
@@ -1229,13 +1238,17 @@ impl App {
                 self.focus_auto = false;
                 self.scroll_to_focus = true;
             }
-            Target::Control(control) => self.control_focus = Some(control),
+            Target::Control(control) => {
+                self.control_focus = Some(control);
+                self.scroll_to_focus = true;
+            }
         }
     }
 
     /// Gamepad and keyboard presses since the last frame.
     fn poll_inputs(&mut self, ctx: &egui::Context) -> Vec<Input> {
         let mut inputs = Vec::new();
+        let on_details = self.context() == Context::Details;
         let now_ms = (ctx.input(|i| i.time) * 1000.0) as u64;
         // Ignore the pad while another window (a running game) has focus.
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
@@ -1247,9 +1260,19 @@ impl App {
                     inputs.push(input);
                 }
             }
-            let held = gilrs.gamepads().find_map(|(_, pad)| {
-                nav::stick_dir(pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY))
-            });
+            let stick = gilrs
+                .gamepads()
+                .map(|(_, pad)| (pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY)))
+                .find(|&(x, y)| nav::stick_dir(x, y).is_some())
+                .unwrap_or((0.0, 0.0));
+            // On the details page, pushing the stick up or down scrolls instead of moving focus.
+            let scroll = if on_details && focused {
+                nav::stick_scroll(stick.0, stick.1)
+            } else {
+                0.0
+            };
+            self.pad_scroll = scroll;
+            let held = nav::stick_dir(stick.0, stick.1).filter(|_| scroll == 0.0);
             let fired = self.stick.update(now_ms, held.filter(|_| focused));
             inputs.extend(fired.map(dir_input));
             ctx.request_repaint_after(Duration::from_millis(33));
@@ -1335,7 +1358,11 @@ impl eframe::App for App {
         let visible = self.visible();
         self.normalize_focus(&visible);
         self.normalize_control_focus();
-        let mut frame = FocusFrame::new(self.control_focus, self.pending_press.take());
+        let mut frame = FocusFrame::new(
+            self.control_focus,
+            self.pending_press.take(),
+            self.scroll_to_focus,
+        );
         // Apply a requested zoom; otherwise notice egui's own Ctrl +/- zoom and remember it.
         if let Some(zoom) = self.zoom_request.take() {
             ctx.set_zoom_factor(zoom);
@@ -1510,7 +1537,7 @@ impl eframe::App for App {
                 "D-pad Move   A Open / Press   B Reset filters   X Reload / Cancel extract   Y Details   Start Rescan   Select Favorites only"
             }
             Context::Details => {
-                "D-pad Move   A Press   B Back   X Reload / Cancel extract   Y Favorite   Start Rescan"
+                "D-pad Move   Left stick Scroll   A Press   B Back   X Reload / Cancel extract   Y Favorite   Start Rescan"
             }
             Context::Chooser => "Up/Down Select   A Pick   B Cancel",
         };
@@ -1566,7 +1593,11 @@ impl eframe::App for App {
                 let Some(edit) = self.tuning_edit.as_mut() else {
                     return;
                 };
-                let action = details_ui(ui, &view, &mut frame, edit);
+                // Left stick: scroll at up to SCROLL_SPEED points per second.
+                let dt = ui.ctx().input(|i| i.stable_dt).min(0.1);
+                self.details_scroll =
+                    (self.details_scroll - self.pad_scroll * PAD_SCROLL_SPEED * dt).max(0.0);
+                let action = details_ui(ui, &view, &mut frame, edit, &mut self.details_scroll);
                 tuning_action = Some(TuningResult {
                     dir: entry.game.dir.clone(),
                     id: entry.game.id.clone(),
