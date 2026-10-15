@@ -1,5 +1,6 @@
 pub mod blur;
 pub mod browse;
+pub mod cursor;
 pub mod exe;
 pub mod extract;
 pub mod fetch;
