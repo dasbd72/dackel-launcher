@@ -206,6 +206,39 @@ pub fn scan(library_dir: &Path) -> io::Result<Vec<Game>> {
     Ok(games)
 }
 
+/// A store a game id comes from. Only DLsite and 072Project ids get store information looked up online.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Store {
+    DLsite,
+    Project072,
+}
+
+impl Store {
+    /// The name shown on the game.
+    pub fn label(self) -> &'static str {
+        match self {
+            Store::DLsite => "DLsite",
+            Store::Project072 => "072Project",
+        }
+    }
+}
+
+/// The store a game id belongs to, by its prefix: `RJ` digits, or `RA` digits.
+pub fn store_of(id: &str) -> Option<Store> {
+    if is_dlsite_id(id) {
+        Some(Store::DLsite)
+    } else if is_072project_id(id) {
+        Some(Store::Project072)
+    } else {
+        None
+    }
+}
+
+fn is_072project_id(name: &str) -> bool {
+    name.strip_prefix("RA")
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// True for ids the DLsite store knows: `RJ` followed by digits.
 pub fn is_dlsite_id(name: &str) -> bool {
     name.strip_prefix("RJ")

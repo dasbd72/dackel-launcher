@@ -6,6 +6,7 @@ use crate::icons::{CHIP_PAD_Y, Icon, chip, icon_text_button};
 use dackel_launcher::browse::format_play_time;
 use dackel_launcher::extract::{Progress, Status};
 use dackel_launcher::info::GameInfo;
+use dackel_launcher::library::store_of;
 use dackel_launcher::nav::Control;
 use dackel_launcher::profile::{self, Stats};
 use dackel_launcher::tuning::{format_env, parse_env, split_args, winetricks_command};
@@ -132,6 +133,9 @@ pub fn details_ui(
         // Without scraped info the heading already is the RJ code.
         if title != view.id {
             ui.label(egui::RichText::new(view.id).monospace().weak());
+        }
+        if let Some(store) = store_of(view.id) {
+            ui.weak(store.label());
         }
     });
     ui.separator();

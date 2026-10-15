@@ -1,0 +1,17 @@
+{
+  "product_id": "RA25128779",
+  "main_category": "game",
+  "developer": "PAON",
+  "locale": {
+    "locale_title": "Sample Title",
+    "locale_summary": "First summary line.\nSecond summary line.",
+    "locale_content": "<p>body</p>",
+    "cover_img": "https://storage.072project.com/img/product/e3b0c442_onh3tp0o.jpg",
+    "main_img": "https://storage.072project.com/img/product/e3b0c442_hvnc1k5n.jpg",
+    "screenshot_imgs": []
+  },
+  "tags": [
+    {"tag_id": 1, "name_tkey": "T_Alpha"},
+    {"tag_id": 3, "name_tkey": "T_Beta"}
+  ]
+}

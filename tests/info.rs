@@ -171,3 +171,146 @@ fn a_game_that_is_not_from_dlsite_is_never_looked_up_online() {
     assert!(!info.found);
     assert_eq!(read_info(&game)["found"], false);
 }
+
+const PROJECT072_URL: &str = "https://api.072project.com/shop/product/RA25128779?source=";
+const PROJECT072_COVER_URL: &str =
+    "https://storage.072project.com/img/product/e3b0c442_onh3tp0o.jpg";
+
+#[test]
+fn project072_product_is_parsed_into_info_json() {
+    let lib = tempfile::tempdir().unwrap();
+    let game = game_in(lib.path(), "RA25128779");
+    let site = Site::default().with(PROJECT072_URL, &fixture("072project_product.json"));
+
+    refresh(&game, &site).unwrap();
+
+    let info = read_info(&game);
+    assert_eq!(info["title"], "Sample Title");
+    assert_eq!(info["circle"], "PAON");
+    assert_eq!(info["genres"], serde_json::json!(["Alpha", "Beta"]));
+    assert_eq!(
+        info["description"],
+        "First summary line.\nSecond summary line."
+    );
+    assert_eq!(info["found"], true);
+}
+
+#[test]
+fn project072_cover_is_saved_beside_info_json() {
+    let lib = tempfile::tempdir().unwrap();
+    let game = game_in(lib.path(), "RA25128779");
+    let cover = b"\xFF\xD8\xFF fake jpeg bytes";
+    let site = Site::default()
+        .with(PROJECT072_URL, &fixture("072project_product.json"))
+        .with(PROJECT072_COVER_URL, cover);
+
+    refresh(&game, &site).unwrap();
+
+    let meta = game.dir.join(".dackel-launcher");
+    assert_eq!(read_info(&game)["cover"], "cover.jpg");
+    assert_eq!(fs::read(meta.join("cover.jpg")).unwrap(), cover);
+}
+
+#[test]
+fn missing_project072_product_falls_back_to_folder_name() {
+    let lib = tempfile::tempdir().unwrap();
+    let game = game_in(lib.path(), "RA99999999");
+
+    refresh(&game, &Site::default()).unwrap();
+
+    let info = read_info(&game);
+    assert_eq!(info["title"], "RA99999999");
+    assert_eq!(info["found"], false);
+}
+
+/// Records every URL asked for, and answers each with the given body.
+#[derive(Default)]
+struct Recording {
+    urls: std::cell::RefCell<Vec<String>>,
+}
+
+impl Fetch for Recording {
+    fn get(&self, url: &str) -> io::Result<Fetched> {
+        self.urls.borrow_mut().push(url.to_owned());
+        Ok(Fetched::NotFound)
+    }
+}
+
+#[test]
+fn a_072project_game_asks_only_the_072project_api() {
+    let lib = tempfile::tempdir().unwrap();
+    let game = game_in(lib.path(), "RA25128779");
+    let fetch = Recording::default();
+
+    refresh(&game, &fetch).unwrap();
+
+    assert_eq!(*fetch.urls.borrow(), vec![PROJECT072_URL.to_owned()]);
+}
+
+#[test]
+fn a_dlsite_game_never_asks_the_072project_api() {
+    let lib = tempfile::tempdir().unwrap();
+    let game = game_in(lib.path(), "RJ123456");
+    let fetch = Recording::default();
+
+    refresh(&game, &fetch).unwrap();
+
+    assert_eq!(*fetch.urls.borrow(), vec![PAGE_URL.to_owned()]);
+}
+
+#[test]
+fn a_072project_body_that_is_not_json_falls_back_to_folder_name() {
+    let lib = tempfile::tempdir().unwrap();
+    let game = game_in(lib.path(), "RA25128779");
+    let site = Site::default().with(PROJECT072_URL, b"<html>maintenance</html>");
+
+    refresh(&game, &site).unwrap();
+
+    let info = read_info(&game);
+    assert_eq!(info["title"], "RA25128779");
+    assert_eq!(info["found"], false);
+}
+
+#[test]
+fn a_072project_product_with_an_empty_title_falls_back() {
+    let lib = tempfile::tempdir().unwrap();
+    let game = game_in(lib.path(), "RA25128779");
+    let body = br#"{"developer":"PAON","locale":{"locale_title":"  ","locale_summary":null,"cover_img":null},"tags":[]}"#;
+    let site = Site::default().with(PROJECT072_URL, body);
+
+    refresh(&game, &site).unwrap();
+
+    let info = read_info(&game);
+    assert_eq!(info["title"], "RA25128779");
+    assert_eq!(info["found"], false);
+}
+
+#[test]
+fn a_072project_product_with_no_developer_tags_or_cover_keeps_only_the_title() {
+    let lib = tempfile::tempdir().unwrap();
+    let game = game_in(lib.path(), "RA25128779");
+    let body = br#"{"developer":null,"locale":{"locale_title":"Bare","locale_summary":null,"cover_img":null}}"#;
+    let site = Site::default().with(PROJECT072_URL, body);
+
+    refresh(&game, &site).unwrap();
+
+    let info = read_info(&game);
+    assert_eq!(info["title"], "Bare");
+    assert_eq!(info["circle"], serde_json::Value::Null);
+    assert_eq!(info["genres"], serde_json::json!([]));
+    assert_eq!(info["description"], "");
+    assert_eq!(info["cover"], serde_json::Value::Null);
+    assert_eq!(info["found"], true);
+}
+
+#[test]
+fn a_072project_tag_without_the_t_prefix_is_kept_as_it_is() {
+    let lib = tempfile::tempdir().unwrap();
+    let game = game_in(lib.path(), "RA25128779");
+    let body = br#"{"developer":"PAON","locale":{"locale_title":"T","locale_summary":"s","cover_img":null},"tags":[{"tag_id":9,"name_tkey":"Plain"}]}"#;
+    let site = Site::default().with(PROJECT072_URL, body);
+
+    refresh(&game, &site).unwrap();
+
+    assert_eq!(read_info(&game)["genres"], serde_json::json!(["Plain"]));
+}

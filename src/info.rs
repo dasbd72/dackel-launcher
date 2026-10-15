@@ -1,5 +1,5 @@
 use crate::fetch::{Fetch, Fetched};
-use crate::library::{Game, META_DIR, is_dlsite_id};
+use crate::library::{Game, META_DIR, Store, store_of};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -20,18 +20,29 @@ pub struct GameInfo {
 }
 
 pub fn refresh(game: &Game, fetch: &dyn Fetch) -> io::Result<GameInfo> {
-    // Only DLsite works have a store page; any other game is shown by its folder name.
-    let parsed = if is_dlsite_id(&game.id) {
-        let url = format!(
-            "https://www.dlsite.com/maniax-touch/work/=/product_id/{}.html",
-            game.id
-        );
-        match fetch.get(&url)? {
-            Fetched::Body(body) => parse_page(&game.id, &String::from_utf8_lossy(&body)),
-            Fetched::NotFound => None,
+    // Only DLsite and 072Project works have a store page; any other game is shown by its folder name.
+    let parsed = match store_of(&game.id) {
+        Some(Store::DLsite) => {
+            let url = format!(
+                "https://www.dlsite.com/maniax-touch/work/=/product_id/{}.html",
+                game.id
+            );
+            match fetch.get(&url)? {
+                Fetched::Body(body) => parse_page(&game.id, &String::from_utf8_lossy(&body)),
+                Fetched::NotFound => None,
+            }
         }
-    } else {
-        None
+        Some(Store::Project072) => {
+            let url = format!(
+                "https://api.072project.com/shop/product/{}?source=",
+                game.id
+            );
+            match fetch.get(&url)? {
+                Fetched::Body(body) => parse_072project(&game.id, &body),
+                Fetched::NotFound => None,
+            }
+        }
+        None => None,
     };
     let (mut info, cover_url) = match parsed {
         Some(parsed) => parsed,
@@ -119,6 +130,55 @@ fn parse_page(id: &str, html: &str) -> Option<(GameInfo, Option<String>)> {
         found: true,
     };
     Some((info, cover_url))
+}
+
+/// The fields of the 072Project product API that the launcher shows.
+#[derive(Deserialize)]
+struct Project072Product {
+    developer: Option<String>,
+    locale: Project072Locale,
+    #[serde(default)]
+    tags: Vec<Project072Tag>,
+}
+
+#[derive(Deserialize)]
+struct Project072Locale {
+    locale_title: String,
+    locale_summary: Option<String>,
+    cover_img: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Project072Tag {
+    name_tkey: String,
+}
+
+fn parse_072project(id: &str, body: &[u8]) -> Option<(GameInfo, Option<String>)> {
+    let product: Project072Product = serde_json::from_slice(body).ok()?;
+    let title = product.locale.locale_title.trim().to_owned();
+    if title.is_empty() {
+        return None;
+    }
+    let info = GameInfo {
+        id: id.to_owned(),
+        title,
+        circle: product.developer.filter(|d| !d.trim().is_empty()),
+        // Tag keys are translation keys such as `T_Alpha`; the text after `T_` is the tag name.
+        genres: product
+            .tags
+            .iter()
+            .map(|tag| {
+                tag.name_tkey
+                    .strip_prefix("T_")
+                    .unwrap_or(&tag.name_tkey)
+                    .to_owned()
+            })
+            .collect(),
+        description: product.locale.locale_summary.unwrap_or_default(),
+        cover: None,
+        found: true,
+    };
+    Some((info, product.locale.cover_img))
 }
 
 fn remove_old_covers(meta: &Path) -> io::Result<()> {

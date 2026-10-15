@@ -12,7 +12,8 @@ use dackel_launcher::info::{GameInfo, cover_path, load};
 use dackel_launcher::jobs::{ExtractJob, JobStatus, OverwriteCheck};
 use dackel_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dackel_launcher::library::{
-    Game, add_library, library_labels, may_create_library, resolve_library, scan_all, unique_roots,
+    Game, Store, add_library, library_labels, may_create_library, resolve_library, scan_all,
+    store_of, unique_roots,
 };
 use dackel_launcher::nav::{
     self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Debounce, Input,
@@ -2144,7 +2145,9 @@ fn tile_ui(ui: &mut egui::Ui, tile: &Tile) -> TileAction {
                             ui.weak("needs exe choice");
                         }
                         (Ok(ExeState::Ready { .. }), _) => {
-                            ui.weak(" ");
+                            // Ready games show their store here; the row is blank otherwise.
+                            let store = store_of(&game.id).map_or(" ", Store::label);
+                            ui.weak(store);
                         }
                     }
                 }
