@@ -1301,6 +1301,19 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// Tab would move egui's own widget focus, which fights the controller focus ring.
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        raw_input.events.retain(|event| {
+            !matches!(
+                event,
+                egui::Event::Key {
+                    key: egui::Key::Tab,
+                    ..
+                }
+            )
+        });
+    }
+
     /// Runs before every frame and, unlike `ui`, also while the window is minimized.
     /// Watching for a game's exit has to happen here, or play time would only be saved
     /// once the launcher is brought back on screen.
