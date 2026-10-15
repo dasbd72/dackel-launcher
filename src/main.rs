@@ -20,7 +20,7 @@ use dackel_launcher::nav::{
     Repeater,
 };
 use dackel_launcher::pickers::{
-    self, ENCODINGS, Picker, PickerList, SORTS, Selection, debounce_label, encoding_label,
+    self, Choice, ENCODINGS, Picker, PickerList, SORTS, Selection, debounce_label, encoding_label,
     sort_label,
 };
 use dackel_launcher::profile::{self, ExeState, Stats};
@@ -1151,32 +1151,13 @@ impl App {
     }
 
     fn pick(&mut self, picker: Picker, index: usize) {
-        match picker {
-            Picker::Sort => {
-                if let Some(sort) = SORTS.get(index) {
-                    self.query.sort = *sort;
-                }
-            }
-            Picker::Encoding => {
-                if let Some(e) = ENCODINGS.get(index) {
-                    self.encoding = *e;
-                }
-            }
-            Picker::Library => {
-                self.library_filter = index
-                    .checked_sub(1)
-                    .filter(|slot| *slot < self.libraries.len());
-            }
-            Picker::Debounce => {
-                if let Some(ms) = DEBOUNCE_PRESETS_MS.get(index) {
-                    self.set_debounce(*ms);
-                }
-            }
-            Picker::Scale => {
-                if let Some(scale) = window::SCALE_PRESETS.get(index) {
-                    self.set_ui_scale(*scale);
-                }
-            }
+        match pickers::pick(picker, index, self.libraries.len()) {
+            Some(Choice::Sort(sort)) => self.query.sort = sort,
+            Some(Choice::Encoding(encoding)) => self.encoding = encoding,
+            Some(Choice::LibraryFilter(slot)) => self.library_filter = slot,
+            Some(Choice::Debounce(ms)) => self.set_debounce(ms),
+            Some(Choice::Scale(scale)) => self.set_ui_scale(scale),
+            None => {}
         }
     }
 
