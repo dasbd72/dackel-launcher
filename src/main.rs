@@ -23,7 +23,7 @@ use dackel_launcher::pickers::{
     self, Choice, ENCODINGS, Picker, PickerList, SORTS, Selection, debounce_label, encoding_label,
     sort_label,
 };
-use dackel_launcher::popup::{OVERWRITE_CHOICES, OverwritePrompt, ProtonPrompt};
+use dackel_launcher::popup::{OVERWRITE_CHOICES, OverwritePrompt, Popup, ProtonPrompt};
 use dackel_launcher::profile::{self, ExeState, Stats};
 use dackel_launcher::proton::{self, ProtonChoice};
 use dackel_launcher::reload::Reloads;
@@ -238,7 +238,8 @@ struct App {
     offline: Vec<PathBuf>,
     /// Show only games from this entry of `libraries`.
     library_filter: Option<usize>,
-    libraries_open: bool,
+    /// The popup that is open, if any.
+    popup: Option<Popup>,
     /// How far down the details page is scrolled, in points.
     details_scroll: f32,
     /// What the left stick asks the details page to do this frame (-1.0 down .. 1.0 up).
@@ -318,7 +319,7 @@ impl App {
             libraries,
             offline: Vec::new(),
             library_filter: None,
-            libraries_open: false,
+            popup: None,
             details_scroll: 0.0,
             pad_scroll: 0.0,
             proton_prompt: None,
@@ -813,7 +814,7 @@ impl App {
     fn context(&self) -> Context {
         if self.chooser.is_some()
             || self.picker.is_some()
-            || self.libraries_open
+            || self.popup.is_some()
             || self.proton_prompt.is_some()
             || self.overwrite_prompt.is_some()
         {
@@ -1081,7 +1082,9 @@ impl App {
             self.rescan();
         }
         if close {
-            self.libraries_open = false;
+            if matches!(self.popup, Some(Popup::Libraries)) {
+                self.popup = None;
+            }
             self.library_error = None;
         }
     }
@@ -1283,7 +1286,7 @@ impl App {
             Command::ChooserCancel => {
                 self.chooser = None;
                 self.picker = None;
-                self.libraries_open = false;
+                self.popup = None;
                 self.proton_prompt = None;
                 self.overwrite_prompt = None;
             }
@@ -1507,7 +1510,7 @@ impl eframe::App for App {
                 }
                 let response = ui.button("Libraries");
                 if frame.pressed(ui, Control::Libraries, &response, true) {
-                    self.libraries_open = true;
+                    self.popup = Some(Popup::Libraries);
                 }
                 let response = ui.button("Fullscreen");
                 fullscreen_click = frame.pressed(ui, Control::Fullscreen, &response, true);
@@ -1854,7 +1857,7 @@ impl eframe::App for App {
             }
         }
 
-        if self.libraries_open {
+        if matches!(self.popup, Some(Popup::Libraries)) {
             self.libraries_window(ui.ctx());
         }
         if self.proton_prompt.is_some() {
@@ -1911,7 +1914,7 @@ impl eframe::App for App {
             self.extract_game(&dir);
         } else if open_libraries {
             // Applied after the match: the match borrows the view, so the window opens here.
-            self.libraries_open = true;
+            self.popup = Some(Popup::Libraries);
         } else if create {
             self.create_library();
         } else if rescan {
