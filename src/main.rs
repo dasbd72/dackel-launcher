@@ -1189,13 +1189,9 @@ impl App {
             Command::Primary => {
                 // A control with focus is pressed; the library's dropdowns open a list.
                 if let Some(control) = self.control_focus {
-                    match control {
-                        Control::Sort => self.open_picker(Picker::Sort),
-                        Control::Encoding => self.open_picker(Picker::Encoding),
-                        Control::Scale => self.open_picker(Picker::Scale),
-                        Control::Debounce => self.open_picker(Picker::Debounce),
-                        Control::LibraryFilter => self.open_picker(Picker::Library),
-                        other => self.pending_press = Some(other),
+                    match Picker::for_control(control) {
+                        Some(picker) => self.open_picker(picker),
+                        None => self.pending_press = Some(control),
                     }
                     return;
                 }
