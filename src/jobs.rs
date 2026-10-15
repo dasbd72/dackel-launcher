@@ -1,6 +1,7 @@
 //! Background extraction, so a big zip does not freeze the window.
 
 use crate::extract::{self, Encoding, Existing, ExtractError, Progress};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -140,4 +141,14 @@ impl OverwriteCheck {
     pub fn poll(&self) -> Option<Result<Vec<PathBuf>, String>> {
         self.rx.try_recv().ok()
     }
+}
+
+/// Whether the game folder `key` has an extraction running or its files being checked for
+/// overwrites. Either one means it must not be extracted, reloaded or launched again.
+pub fn extraction_in_progress(
+    extracting: &HashMap<String, ExtractJob>,
+    checking: &HashMap<String, OverwriteCheck>,
+    key: &str,
+) -> bool {
+    extracting.contains_key(key) || checking.contains_key(key)
 }
