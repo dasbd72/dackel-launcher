@@ -62,6 +62,8 @@ pub enum Control {
     Libraries,
     /// On the empty-state page, opens the Libraries window.
     AddLibrary,
+    /// On the empty-state page, creates the missing library folder.
+    CreateLibrary,
     Fullscreen,
     Blur,
     Scale,

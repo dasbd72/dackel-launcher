@@ -205,6 +205,49 @@ fn moving_with_nothing_focused_or_nothing_drawn_does_nothing() {
     assert!(!undrawn.scroll_requested());
 }
 
+/// The empty library: a toolbar and no game tiles.
+fn toolbar_only() -> Cursor {
+    let mut cursor = Cursor::new();
+    cursor.end_frame(vec![
+        control(Control::Rescan, 0.0, 0.0),
+        control(Control::Sort, 100.0, 0.0),
+    ]);
+    cursor.keep_on_game(&[]);
+    cursor
+}
+
+#[test]
+fn with_no_games_a_move_puts_focus_on_the_first_control() {
+    for dir in [Dir::Up, Dir::Down, Dir::Left, Dir::Right] {
+        let mut cursor = toolbar_only();
+        cursor.move_toward(dir);
+
+        assert_eq!(cursor.control(), Some(Control::Rescan), "{dir:?}");
+        assert_eq!(cursor.game(), None);
+        assert!(cursor.scroll_requested());
+    }
+}
+
+#[test]
+fn with_no_games_the_second_move_goes_on_from_the_first_control() {
+    let mut cursor = toolbar_only();
+    cursor.move_toward(Dir::Right);
+    cursor.move_toward(Dir::Right);
+
+    assert_eq!(cursor.control(), Some(Control::Sort));
+}
+
+#[test]
+fn a_cursor_whose_game_is_gone_and_whose_page_has_no_games_can_still_move() {
+    let mut cursor = on_the_grid();
+    cursor.end_frame(vec![control(Control::AddLibrary, 0.0, 0.0)]);
+    cursor.keep_on_game(&[]);
+
+    cursor.move_toward(Dir::Down);
+
+    assert_eq!(cursor.control(), Some(Control::AddLibrary));
+}
+
 #[test]
 fn a_press_is_taken_once() {
     let mut cursor = Cursor::new();

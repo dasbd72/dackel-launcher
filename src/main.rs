@@ -1515,7 +1515,8 @@ impl eframe::App for App {
                         "{} does not exist.",
                         self.libraries.beside().display()
                     ));
-                    if ui.button("Create it").clicked() {
+                    let response = ui.button("Create it");
+                    if frame.pressed(ui, Control::CreateLibrary, &response, true) {
                         create = true;
                     }
                 } else {
