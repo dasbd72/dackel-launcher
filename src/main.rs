@@ -4,7 +4,7 @@ mod focus;
 mod icons;
 
 use covers::{BlurCache, CoverView};
-use dackel_launcher::actions::Actions;
+use dackel_launcher::actions::{Actions, Exclusive};
 use dackel_launcher::browse::{self, Card, Query, Sort};
 use dackel_launcher::cursor::{Cursor, Page, Slot, Target};
 use dackel_launcher::extract::{self, Encoding, Existing, Progress, Status};
@@ -688,6 +688,55 @@ impl App {
         }
         if let Some(scale) = actions.scale {
             self.set_ui_scale(scale);
+        }
+    }
+
+    /// Carries out what the frame asked for, once everything has been drawn: the popups'
+    /// answers, the clicks on tiles, the details page, then the one action that changes the
+    /// game list. Drawing never changes the app itself; this is the only place that does.
+    fn apply_actions(&mut self, mut actions: Actions) {
+        if let Some((picker, index)) = actions.pick.take() {
+            self.close_picker();
+            self.pick(picker, index);
+        }
+        if actions.cancel_picker {
+            self.close_picker();
+        }
+        if let Some(id) = actions.select.take() {
+            self.cursor.select_game(id);
+        }
+        for id in std::mem::take(&mut actions.cancel_extract) {
+            self.cancel_extraction(&id);
+        }
+        if let Some(i) = actions.launch.take() {
+            self.launch_game(i);
+        }
+        if actions.close_chooser {
+            self.close_chooser();
+        }
+        if let Some(id) = actions.open_details.take() {
+            self.open_details_page(id);
+        }
+        if actions.back {
+            self.close_details_page();
+        }
+        if let Some(id) = actions.favorite.take() {
+            self.toggle_favorite(&id);
+        }
+        if let Some(game) = actions.reload.take() {
+            self.infos.reload(game);
+        }
+        match actions.take_exclusive() {
+            Some(Exclusive::ChooseExe { dir, exe }) => match profile::choose(&dir, &exe) {
+                Ok(()) => self.rescan(),
+                Err(err) => self.view = View::Error(err.to_string()),
+            },
+            Some(Exclusive::Extract(dir)) => self.extract_game(&dir),
+            // Applied here and not while drawing: the central panel borrows the view.
+            Some(Exclusive::OpenLibraries) => self.popup = Some(Popup::Libraries),
+            Some(Exclusive::CreateLibrary) => self.create_library(),
+            Some(Exclusive::Rescan) => self.rescan(),
+            None => {}
         }
     }
 
@@ -1722,52 +1771,7 @@ impl eframe::App for App {
                 })
                 .collect(),
         );
-        if let Some((picker, index)) = actions.pick.take() {
-            self.close_picker();
-            self.pick(picker, index);
-        }
-        if actions.cancel_picker {
-            self.close_picker();
-        }
-        if let Some(id) = actions.select.take() {
-            self.cursor.select_game(id);
-        }
-        for id in std::mem::take(&mut actions.cancel_extract) {
-            self.cancel_extraction(&id);
-        }
-        if let Some(i) = actions.launch.take() {
-            self.launch_game(i);
-        }
-        if actions.close_chooser {
-            self.close_chooser();
-        }
-        if let Some(id) = actions.open_details.take() {
-            self.open_details_page(id);
-        }
-        if actions.back {
-            self.close_details_page();
-        }
-        if let Some(id) = actions.favorite.take() {
-            self.toggle_favorite(&id);
-        }
-        if let Some(game) = actions.reload.take() {
-            self.infos.reload(game);
-        }
-        if let Some((dir, exe)) = actions.details_choice.take().or(actions.choose_exe.take()) {
-            match profile::choose(&dir, &exe) {
-                Ok(()) => self.rescan(),
-                Err(err) => self.view = View::Error(err.to_string()),
-            }
-        } else if let Some(dir) = actions.extract.take().or(actions.details_extract.take()) {
-            self.extract_game(&dir);
-        } else if actions.open_libraries {
-            // Applied after the match: the match borrows the view, so the window opens here.
-            self.popup = Some(Popup::Libraries);
-        } else if actions.create_library {
-            self.create_library();
-        } else if actions.rescan {
-            self.rescan();
-        }
+        self.apply_actions(actions);
         for command in self.window.drain_commands() {
             ctx.send_viewport_cmd(match command {
                 WindowCommand::Fullscreen(on) => egui::ViewportCommand::Fullscreen(on),
