@@ -5,6 +5,7 @@ mod icons;
 
 use covers::{BlurCache, CoverView};
 use dackel_launcher::browse::{self, Card, Query, Sort};
+use dackel_launcher::cursor::Cursor;
 use dackel_launcher::extract::{self, Encoding, Existing, Progress, Status};
 use dackel_launcher::fetch::HttpFetch;
 use dackel_launcher::fonts;
@@ -269,7 +270,8 @@ struct App {
     focus_id: Option<String>,
     /// True until the user moves the cursor: it then tracks the first game as the list re-sorts.
     focus_auto: bool,
-    list_sel: usize,
+    /// Controller focus, and the selected row of the open popup list.
+    cursor: Cursor,
     /// Set when focus is on a toolbar or details-page control instead of a game tile.
     control_focus: Option<Control>,
     /// Where everything focusable was on the last frame; D-pad moves use it.
@@ -343,7 +345,7 @@ impl App {
             debounce: Debounce::new(startup.settings.debounce_ms.unwrap_or(DEFAULT_DEBOUNCE_MS)),
             focus_id: None,
             focus_auto: true,
-            list_sel: 0,
+            cursor: Cursor::new(),
             control_focus: None,
             nav_items: Vec::new(),
             pending_press: None,
@@ -556,7 +558,7 @@ impl App {
                         search: String::new(),
                     }));
                     // Cancel is the first choice, so a stray A press overwrites nothing.
-                    self.list_sel = 0;
+                    self.cursor.reset_list();
                     self.message = None;
                 }
                 Err(err) => {
@@ -634,7 +636,7 @@ impl App {
                 self.start_game(&dir, path.as_deref());
             }
             Ok(ProtonChoice::Mismatch { pinned, newest }) => {
-                self.list_sel = 0;
+                self.cursor.reset_list();
                 // Shown when a game's pinned Proton is not installed on this machine.
                 self.popup = Some(Popup::Proton(ProtonPrompt {
                     dir,
@@ -738,7 +740,7 @@ impl App {
                 if let Some(prompt) = self.popup.as_mut().and_then(Popup::as_proton_mut) {
                     prompt.choosing = true;
                 }
-                self.list_sel = 0;
+                self.cursor.reset_list();
             }
             PromptOption::Version(path) => self.launch_with_other_proton(Some(path)),
         }
@@ -909,7 +911,10 @@ impl App {
                 }
                 ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
                     for (i, (option, label)) in options.iter().enumerate() {
-                        if ui.selectable_label(i == self.list_sel, label).clicked() {
+                        if ui
+                            .selectable_label(i == self.cursor.list_sel(), label)
+                            .clicked()
+                        {
                             answer = Some(option.clone());
                         }
                     }
@@ -973,7 +978,7 @@ impl App {
                     });
                 ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
                     for (i, label) in OVERWRITE_CHOICES.iter().enumerate() {
-                        if ui.selectable_label(i == self.list_sel, *label).clicked() {
+                        if ui.selectable_label(i == self.cursor.list_sel(), *label).clicked() {
                             answer = Some(i);
                         }
                     }
@@ -1166,7 +1171,7 @@ impl App {
     }
 
     fn open_picker(&mut self, picker: Picker) {
-        self.list_sel = self.picker_list(picker).current;
+        self.cursor.set_list(self.picker_list(picker).current);
         self.popup = Some(Popup::Picker(picker));
     }
 
@@ -1214,7 +1219,7 @@ impl App {
 
     fn open_chooser(&mut self, index: usize) {
         self.popup = Some(Popup::Chooser(index));
-        self.list_sel = 0;
+        self.cursor.reset_list();
     }
 
     fn apply(&mut self, command: Command) {
@@ -1300,11 +1305,13 @@ impl App {
                         |_| self.prompt_options().len(),
                     )
                 });
-                let last = len.saturating_sub(1) as i64;
-                self.list_sel = (self.list_sel as i64 + i64::from(delta)).clamp(0, last) as usize;
+                self.cursor.move_list(delta, len);
             }
             Command::ChooserPick => {
-                let Some(target) = self.popup.as_ref().map(|popup| popup.pick(self.list_sel))
+                let Some(target) = self
+                    .popup
+                    .as_ref()
+                    .map(|popup| popup.pick(self.cursor.list_sel()))
                 else {
                     return;
                 };
@@ -1890,7 +1897,7 @@ impl eframe::App for App {
                         ui.label("No exe found in this folder.");
                     }
                     if let Some(candidate) =
-                        exe_choices(ui, &entry.candidates, Some(self.list_sel), None)
+                        exe_choices(ui, &entry.candidates, Some(self.cursor.list_sel()), None)
                     {
                         choice = Some((entry.game.dir.clone(), candidate));
                     }
@@ -1902,7 +1909,7 @@ impl eframe::App for App {
 
         if let Some(picker) = self.picker_open() {
             let list = self.picker_list(picker);
-            match picker_window(ui.ctx(), &list, self.list_sel) {
+            match picker_window(ui.ctx(), &list, self.cursor.list_sel()) {
                 Some(PickerEvent::Pick(i)) => picker_pick = Some((picker, i)),
                 Some(PickerEvent::Cancel) => picker_cancel = true,
                 None => {}
