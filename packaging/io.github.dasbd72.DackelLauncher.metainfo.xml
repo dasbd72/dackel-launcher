@@ -20,8 +20,8 @@
     </p>
   </description>
   <launchable type="desktop-id">io.github.dasbd72.DackelLauncher.desktop</launchable>
-  <url type="homepage">https://github.com/dasbd72/dlsite-launcher</url>
-  <url type="bugtracker">https://github.com/dasbd72/dlsite-launcher/issues</url>
+  <url type="homepage">https://github.com/dasbd72/dackel-launcher</url>
+  <url type="bugtracker">https://github.com/dasbd72/dackel-launcher/issues</url>
   <content_rating type="oars-1.1"/>
   <provides>
     <binary>dackel-launcher</binary>

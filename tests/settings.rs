@@ -1,4 +1,4 @@
-use dackel_launcher::settings::{Settings, load, migrate_legacy_config, save, settings_path};
+use dackel_launcher::settings::{Settings, load, save, settings_path};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -142,59 +142,4 @@ fn no_extra_libraries_by_default_and_old_files_still_load() {
     fs::write(&path, br#"{"ui_scale": 1.5}"#).unwrap();
 
     assert!(load(&path).libraries.is_empty());
-}
-
-#[test]
-fn the_old_config_folder_is_moved_to_the_new_name_once() {
-    let config = tempfile::tempdir().unwrap();
-    let old = config.path().join("dlsite-launcher");
-    fs::create_dir_all(&old).unwrap();
-    fs::write(old.join("settings.json"), "{\"ui_scale\":1.5}").unwrap();
-    fs::write(old.join("proton-path"), "/opt/proton").unwrap();
-
-    let moved = migrate_legacy_config(config.path()).unwrap();
-
-    let new = config.path().join("dackel-launcher");
-    assert!(moved);
-    assert!(!old.exists());
-    assert_eq!(load(&new.join("settings.json")).ui_scale, Some(1.5));
-    assert_eq!(
-        fs::read_to_string(new.join("proton-path")).unwrap(),
-        "/opt/proton"
-    );
-    assert!(
-        !migrate_legacy_config(config.path()).unwrap(),
-        "nothing left to move"
-    );
-}
-
-#[test]
-fn an_existing_new_config_folder_is_never_replaced_by_the_old_one() {
-    let config = tempfile::tempdir().unwrap();
-    let old = config.path().join("dlsite-launcher");
-    let new = config.path().join("dackel-launcher");
-    fs::create_dir_all(&old).unwrap();
-    fs::create_dir_all(&new).unwrap();
-    fs::write(old.join("settings.json"), "old").unwrap();
-    fs::write(new.join("settings.json"), "new").unwrap();
-
-    let moved = migrate_legacy_config(config.path()).unwrap();
-
-    assert!(!moved);
-    assert_eq!(
-        fs::read_to_string(new.join("settings.json")).unwrap(),
-        "new"
-    );
-    assert!(
-        old.join("settings.json").exists(),
-        "the old folder is left alone"
-    );
-}
-
-#[test]
-fn migrating_with_no_old_folder_does_nothing() {
-    let config = tempfile::tempdir().unwrap();
-
-    assert!(!migrate_legacy_config(config.path()).unwrap());
-    assert!(!config.path().join("dackel-launcher").exists());
 }

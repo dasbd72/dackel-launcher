@@ -130,10 +130,6 @@ impl Startup {
         let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let settings_path = settings::settings_path(xdg.as_deref(), home.as_deref());
-        // Settings of the program's former name carry over once, before anything reads them.
-        if let Some(config_home) = settings_path.as_deref().and_then(|p| p.parent()?.parent()) {
-            let _ = settings::migrate_legacy_config(config_home);
-        }
         let settings = settings_path
             .as_deref()
             .map(settings::load)
