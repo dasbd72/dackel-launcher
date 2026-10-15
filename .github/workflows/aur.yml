@@ -25,17 +25,20 @@ jobs:
           version="${VERSION#v}"
           sed -i "s/^pkgver=.*/pkgver=$version/; s/^pkgrel=.*/pkgrel=1/" PKGBUILD
 
-      # Fills in the source checksum for that version, builds the package in an Arch
-      # container as a test, writes .SRCINFO and pushes both files to the AUR.
+      # The action's own test build runs in a container without the multilib repository,
+      # where umu-launcher lives, so the package is test-built here first.
+      - name: Test build
+        run: scripts/test-aur-build.sh
+
+      # Fills in the source checksum for that version, writes .SRCINFO and pushes both
+      # files to the AUR.
       - name: Publish to the AUR
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
         with:
           pkgname: dackel-launcher
           pkgbuild: PKGBUILD
           updpkgsums: true
-          test: true
-          # The action's default adds --nodeps, which would skip installing cargo.
-          test_flags: --clean --cleanbuild --syncdeps --noconfirm
+          test: false
           commit_username: dasbd72
           commit_email: twbd723@gmail.com
           commit_message: Update to ${{ inputs.version || github.ref_name }}

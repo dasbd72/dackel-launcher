@@ -8,7 +8,7 @@ url='https://github.com/dasbd72/dackel-launcher'
 license=('MIT')
 depends=('glibc' 'hicolor-icon-theme' 'libgcc' 'systemd-libs' 'umu-launcher')
 makedepends=('cargo')
-options=('!lto')
+options=('!lto' '!debug')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')  # the AUR workflow fills in the real checksum for each release
 
