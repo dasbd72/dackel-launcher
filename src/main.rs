@@ -6,11 +6,11 @@ mod icons;
 use covers::{BlurCache, CoverView};
 use details::{DetailsView, TuningEdit, details_ui, exe_choices};
 use dlsite_launcher::browse::{self, Card, Query, Sort};
-use dlsite_launcher::extract::{self, Encoding, Progress, Status};
+use dlsite_launcher::extract::{self, Encoding, Existing, Progress, Status};
 use dlsite_launcher::fetch::HttpFetch;
 use dlsite_launcher::fonts;
 use dlsite_launcher::info::{GameInfo, cover_path, load};
-use dlsite_launcher::jobs::{ExtractJob, JobStatus};
+use dlsite_launcher::jobs::{ExtractJob, JobStatus, OverwriteCheck};
 use dlsite_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dlsite_launcher::library::{
     Game, add_library, library_labels, resolve_library, scan_all, unique_roots,
@@ -246,6 +246,17 @@ struct ProtonPrompt {
     choosing: bool,
 }
 
+/// Files an extraction would replace, shown for the user to decide.
+struct OverwritePrompt {
+    dir: PathBuf,
+    /// Relative to the game folder.
+    files: Vec<PathBuf>,
+    search: String,
+}
+
+/// The answers on the overwrite prompt, in the order they are listed and selected.
+const OVERWRITE_CHOICES: [&str; 3] = ["Cancel", "Overwrite", "Skip existing"];
+
 struct App {
     /// The library beside the binary (or `--library`); always first in `libraries`.
     library: PathBuf,
@@ -262,6 +273,9 @@ struct App {
     pad_scroll: f32,
     /// Shown when a game's pinned Proton is not installed on this machine.
     proton_prompt: Option<ProtonPrompt>,
+    overwrite_prompt: Option<OverwritePrompt>,
+    /// Looking for files an extraction would overwrite, by game folder.
+    checking: HashMap<String, OverwriteCheck>,
     /// The details page's Launch options form.
     tuning_edit: Option<TuningEdit>,
     library_input: String,
@@ -334,6 +348,8 @@ impl App {
             details_scroll: 0.0,
             pad_scroll: 0.0,
             proton_prompt: None,
+            overwrite_prompt: None,
+            checking: HashMap::new(),
             tuning_edit: None,
             library_input: String::new(),
             library_error: None,
@@ -389,7 +405,12 @@ impl App {
 
     fn rescan(&mut self) {
         self.chooser = None;
-        let extracting: HashSet<String> = self.extracting.keys().cloned().collect();
+        let extracting: HashSet<String> = self
+            .extracting
+            .keys()
+            .chain(self.checking.keys())
+            .cloned()
+            .collect();
         let scans = scan_all(&self.libraries);
         self.offline = scans
             .iter()
@@ -502,48 +523,110 @@ impl App {
         }
     }
 
-    /// Starts extracting in the background; progress shows on the tile and details page.
+    /// Looks for files the extraction would overwrite; the extraction starts at once when
+    /// there are none, otherwise the user is asked first.
     fn extract_game(&mut self, dir: &std::path::Path) {
         let id = dir.to_string_lossy().into_owned();
-        let name = dir
-            .file_name()
-            .map_or_else(|| id.clone(), |n| n.to_string_lossy().into_owned());
+        if self.extracting.contains_key(&id) || self.checking.contains_key(&id) {
+            return;
+        }
+        let Some(ctx) = self.repaint.clone() else {
+            return;
+        };
+        let check = OverwriteCheck::start(dir.to_path_buf(), self.encoding, move || {
+            ctx.request_repaint()
+        });
+        self.checking.insert(id.clone(), check);
+        self.message = Some(format!("Checking {}...", file_name_of(&id)));
+    }
+
+    /// Starts extracting in the background; progress shows on the tile and details page.
+    fn begin_extraction(&mut self, dir: &std::path::Path, existing: Existing) {
+        let id = dir.to_string_lossy().into_owned();
         if self.extracting.contains_key(&id) {
             return;
         }
         let Some(ctx) = self.repaint.clone() else {
             return;
         };
-        let job = ExtractJob::start(dir.to_path_buf(), self.encoding, move || {
+        let job = ExtractJob::start_with(dir.to_path_buf(), self.encoding, existing, move || {
             ctx.request_repaint()
         });
         self.extracting.insert(id.clone(), job);
-        self.message = Some(format!("Extracting {name}..."));
+        self.message = Some(format!("Extracting {}...", file_name_of(&id)));
     }
 
-    /// Asks a running extraction to stop; it removes what it created once it has.
+    /// Asks a running extraction (or the check before it) to stop; an extraction removes
+    /// what it created once it has.
     fn cancel_extraction(&mut self, id: &str) {
-        if let Some(job) = self.extracting.get(id) {
+        if self.checking.remove(id).is_some() {
+            self.message = Some(format!("Cancelled extracting {}", file_name_of(id)));
+        } else if let Some(job) = self.extracting.get(id) {
             job.cancel();
             self.message = Some(format!("Cancelling {}...", file_name_of(id)));
         }
     }
 
+    /// Acts on finished overwrite checks: extract at once, or ask first.
+    fn poll_checks(&mut self) {
+        let done: Vec<(String, Result<Vec<PathBuf>, String>)> = self
+            .checking
+            .iter()
+            .filter_map(|(id, check)| Some((id.clone(), check.poll()?)))
+            .collect();
+        for (id, result) in done {
+            self.checking.remove(&id);
+            let dir = PathBuf::from(&id);
+            match result {
+                Ok(files) if files.is_empty() => self.begin_extraction(&dir, Existing::Overwrite),
+                Ok(files) => {
+                    self.overwrite_prompt = Some(OverwritePrompt {
+                        dir,
+                        files,
+                        search: String::new(),
+                    });
+                    // Cancel is the first choice, so a stray A press overwrites nothing.
+                    self.list_sel = 0;
+                    self.message = None;
+                }
+                Err(err) => {
+                    self.message = Some(format!("Extract failed ({}): {err}", file_name_of(&id)));
+                }
+            }
+        }
+    }
+
+    fn answer_overwrite(&mut self, choice: usize) {
+        let Some(prompt) = self.overwrite_prompt.take() else {
+            return;
+        };
+        match choice {
+            1 => self.begin_extraction(&prompt.dir, Existing::Overwrite),
+            2 => self.begin_extraction(&prompt.dir, Existing::Skip),
+            _ => {}
+        }
+    }
+
     /// Collects finished extractions. Runs from `logic`, so it works while minimized.
     fn poll_extractions(&mut self) {
+        self.poll_checks();
         let mut finished = Vec::new();
         for (id, job) in &mut self.extracting {
             match job.poll() {
                 JobStatus::Running(_) => {}
-                done => finished.push((id.clone(), done)),
+                done => finished.push((id.clone(), job.progress(), done)),
             }
         }
         if finished.is_empty() {
             return;
         }
-        for (id, status) in finished {
+        for (id, progress, status) in finished {
             self.extracting.remove(&id);
             self.message = Some(match status {
+                JobStatus::Finished(Ok(())) if progress.files_skipped > 0 => format!(
+                    "Extracted {id}: {} new, {} skipped",
+                    progress.files_done, progress.files_skipped
+                ),
                 JobStatus::Finished(Ok(())) => {
                     format!("Extracted {id}")
                 }
@@ -754,6 +837,7 @@ impl App {
             || self.picker.is_some()
             || self.libraries_open
             || self.proton_prompt.is_some()
+            || self.overwrite_prompt.is_some()
         {
             Context::Chooser
         } else if matches!(self.screen, Screen::Details(_)) {
@@ -871,6 +955,65 @@ impl App {
         }
     }
 
+    /// Lists the files an extraction would overwrite and asks what to do about them.
+    fn overwrite_prompt_window(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = &mut self.overwrite_prompt else {
+            return;
+        };
+        let needle = prompt.search.to_lowercase();
+        let shown: Vec<&PathBuf> = prompt
+            .files
+            .iter()
+            .filter(|f| needle.is_empty() || f.to_string_lossy().to_lowercase().contains(&needle))
+            .collect();
+        let game = prompt
+            .dir
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let total = prompt.files.len();
+        let stick = self.pad_scroll * PAD_SCROLL_SPEED * ctx.input(|i| i.stable_dt).min(0.1);
+        let mut answer = None;
+        egui::Window::new("Overwrite files?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_width(520.0_f32.min(ctx.content_rect().width() - 64.0));
+                ui.label(format!(
+                    "Extracting {game} would replace {total} existing file{}. Files not in the zip are not touched.",
+                    if total == 1 { "" } else { "s" }
+                ));
+                ui.add(
+                    egui::TextEdit::singleline(&mut prompt.search)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("Search paths"),
+                );
+                if !needle.is_empty() {
+                    ui.weak(format!("{} of {total} files", shown.len()));
+                }
+                let row = ui.text_style_height(&egui::TextStyle::Body);
+                egui::ScrollArea::vertical()
+                    .max_height(row * 12.0)
+                    .auto_shrink([false, true])
+                    .show_rows(ui, row, shown.len(), |ui, range| {
+                        ui.scroll_with_delta(egui::vec2(0.0, stick));
+                        for path in &shown[range] {
+                            ui.add(egui::Label::new(path.display().to_string()).truncate());
+                        }
+                    });
+                ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                    for (i, label) in OVERWRITE_CHOICES.iter().enumerate() {
+                        if ui.selectable_label(i == self.list_sel, *label).clicked() {
+                            answer = Some(i);
+                        }
+                    }
+                });
+            });
+        if let Some(choice) = answer {
+            self.answer_overwrite(choice);
+        }
+    }
+
     /// The manager for the added libraries: list them, add a typed path, remove one.
     fn libraries_window(&mut self, ctx: &egui::Context) {
         let mut remove: Option<usize> = None;
@@ -948,6 +1091,7 @@ impl App {
                 let running: Vec<String> = self
                     .extracting
                     .keys()
+                    .chain(self.checking.keys())
                     .filter(|k| std::path::Path::new(k).parent() == Some(gone.as_path()))
                     .cloned()
                     .collect();
@@ -1126,6 +1270,7 @@ impl App {
                 let dir = entry.game.dir.clone();
                 if self.launcher.is_running(&dir)
                     || self.extracting.contains_key(&entry.game.dir_key())
+                    || self.checking.contains_key(&entry.game.dir_key())
                 {
                     return;
                 }
@@ -1145,7 +1290,9 @@ impl App {
                 if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view) {
                     let game = entries[i].game.clone();
                     // While a game is extracting, this button cancels that instead.
-                    if self.extracting.contains_key(&game.dir_key()) {
+                    if self.extracting.contains_key(&game.dir_key())
+                        || self.checking.contains_key(&game.dir_key())
+                    {
                         self.cancel_extraction(&game.dir_key());
                     } else {
                         self.reload(game);
@@ -1174,6 +1321,7 @@ impl App {
             }
             Command::ChooserMove(delta) => {
                 let len = match self.picker {
+                    _ if self.overwrite_prompt.is_some() => OVERWRITE_CHOICES.len(),
                     _ if self.proton_prompt.is_some() => self.prompt_options().len(),
                     Some(picker) => self.picker_list(picker).labels.len(),
                     None => match &self.view {
@@ -1188,6 +1336,10 @@ impl App {
                 self.list_sel = (self.list_sel as i64 + i64::from(delta)).clamp(0, last) as usize;
             }
             Command::ChooserPick => {
+                if self.overwrite_prompt.is_some() {
+                    self.answer_overwrite(self.list_sel);
+                    return;
+                }
                 if self.proton_prompt.is_some() {
                     if let Some((option, _)) = self.prompt_options().into_iter().nth(self.list_sel)
                     {
@@ -1217,6 +1369,7 @@ impl App {
                 self.picker = None;
                 self.libraries_open = false;
                 self.proton_prompt = None;
+                self.overwrite_prompt = None;
             }
             Command::ToggleFullscreen => self.toggle_fullscreen(),
             Command::ToggleBlur => self.toggle_blur(),
@@ -1271,7 +1424,7 @@ impl App {
                 .find(|&(x, y)| nav::stick_dir(x, y).is_some())
                 .unwrap_or((0.0, 0.0));
             // On the details page, pushing the stick up or down scrolls instead of moving focus.
-            let scroll = if on_details && focused {
+            let scroll = if (on_details || self.overwrite_prompt.is_some()) && focused {
                 nav::stick_scroll(stick.0, stick.1)
             } else {
                 0.0
@@ -1331,7 +1484,7 @@ impl eframe::App for App {
             self.repaint = Some(ctx.clone());
         }
         self.poll_extractions();
-        if !self.extracting.is_empty() {
+        if !self.extracting.is_empty() || !self.checking.is_empty() {
             // Backstop in case a wake-up is missed.
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -1606,10 +1759,11 @@ impl eframe::App for App {
                     error: self.errors.get(id).map(String::as_str),
                     busy: self.busy.contains(id),
                     running: self.launcher.is_running(&entry.game.dir),
-                    extracting: self
-                        .extracting
-                        .get(&entry.game.dir_key())
-                        .map(ExtractJob::progress),
+                    extracting: progress_of(
+                        &self.extracting,
+                        &self.checking,
+                        &entry.game.dir_key(),
+                    ),
                     dir: &entry.game.dir,
                     proton_pin: tuning_pin.as_deref(),
                 };
@@ -1687,10 +1841,11 @@ impl eframe::App for App {
                                             .map(String::as_str),
                                         busy: self.busy.contains(&entry.game.key()),
                                         running: self.launcher.is_running(&entry.game.dir),
-                                        extracting: self
-                                            .extracting
-                                            .get(&entry.game.dir_key())
-                                            .map(ExtractJob::progress),
+                                        extracting: progress_of(
+                                            &self.extracting,
+                                            &self.checking,
+                                            &entry.game.dir_key(),
+                                        ),
                                         focused: self.control_focus.is_none()
                                             && self.focus_id.as_ref() == Some(&entry.game.key()),
                                         cover_file,
@@ -1773,6 +1928,9 @@ impl eframe::App for App {
         }
         if self.proton_prompt.is_some() {
             self.proton_prompt_window(ui.ctx());
+        }
+        if self.overwrite_prompt.is_some() {
+            self.overwrite_prompt_window(ui.ctx());
         }
         if let Some(result) = tuning_action {
             self.apply_tuning(result);
@@ -2137,6 +2295,21 @@ fn picker_window(ctx: &egui::Context, list: &PickerList, selected: usize) -> Opt
 }
 
 /// The last component of a path kept as text, for messages.
+/// The progress to draw for a game folder: the extraction's, or an empty bar while the
+/// overwrite check runs.
+fn progress_of(
+    extracting: &HashMap<String, ExtractJob>,
+    checking: &HashMap<String, OverwriteCheck>,
+    id: &str,
+) -> Option<Progress> {
+    extracting.get(id).map(ExtractJob::progress).or_else(|| {
+        checking.contains_key(id).then_some(Progress {
+            bytes_total: 1,
+            ..Progress::default()
+        })
+    })
+}
+
 fn file_name_of(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()

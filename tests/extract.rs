@@ -1,6 +1,6 @@
 use dlsite_launcher::extract::{
-    Encoding, ExtractError, Progress, Status, Unsupported, extract, extract_cancellable,
-    extract_with_progress, status,
+    Encoding, Existing, ExtractError, Progress, Status, Unsupported, extract, extract_cancellable,
+    extract_with_existing, extract_with_progress, overwrites, status,
 };
 use std::fs;
 use std::io::Write;
@@ -346,6 +346,7 @@ fn progress_fraction_is_by_bytes_then_files_and_never_exceeds_one() {
         bytes_total: 200,
         files_done: 0,
         files_total: 4,
+        files_skipped: 0,
     };
     assert_eq!(half.fraction(), 0.25);
 
@@ -354,6 +355,7 @@ fn progress_fraction_is_by_bytes_then_files_and_never_exceeds_one() {
         bytes_total: 0,
         files_done: 1,
         files_total: 4,
+        files_skipped: 0,
     };
     assert_eq!(only_empty_files.fraction(), 0.25);
 
@@ -362,6 +364,7 @@ fn progress_fraction_is_by_bytes_then_files_and_never_exceeds_one() {
         bytes_total: 0,
         files_done: 0,
         files_total: 0,
+        files_skipped: 0,
     };
     assert_eq!(nothing.fraction(), 1.0);
 
@@ -370,6 +373,7 @@ fn progress_fraction_is_by_bytes_then_files_and_never_exceeds_one() {
         bytes_total: 200,
         files_done: 4,
         files_total: 4,
+        files_skipped: 0,
     };
     assert_eq!(over.fraction(), 1.0);
 }
@@ -461,4 +465,71 @@ fn an_uncancelled_extraction_leaves_no_temporary_files() {
         names_in(&dir.path().join("Game")),
         ["a.bin", "b.bin", "c.txt"]
     );
+}
+
+#[test]
+fn overwrites_lists_the_existing_files_the_zip_would_replace() {
+    let dir = tempfile::tempdir().unwrap();
+    write_zip(
+        &dir.path().join("RJ1.zip"),
+        &[("Game/save/s1.dat", b"new"), ("Game/new.txt", b"n")],
+    );
+    fs::create_dir_all(dir.path().join("Game/save")).unwrap();
+    fs::write(dir.path().join("Game/save/s1.dat"), b"mine").unwrap();
+    fs::write(dir.path().join("Game/other.txt"), b"keep").unwrap();
+
+    let found = overwrites(dir.path(), Encoding::Auto).unwrap();
+
+    assert_eq!(found, vec![Path::new("Game/save/s1.dat")]);
+    assert_eq!(
+        fs::read(dir.path().join("Game/save/s1.dat")).unwrap(),
+        b"mine",
+        "listing writes nothing"
+    );
+}
+
+#[test]
+fn overwrites_is_empty_for_a_fresh_folder_and_includes_a_wrapper_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    write_zip(&dir.path().join("RJ2.zip"), &[("loose.txt", b"x")]);
+
+    assert!(overwrites(dir.path(), Encoding::Auto).unwrap().is_empty());
+
+    fs::create_dir_all(dir.path().join("RJ2")).unwrap();
+    fs::write(dir.path().join("RJ2/loose.txt"), b"old").unwrap();
+    assert_eq!(
+        overwrites(dir.path(), Encoding::Auto).unwrap(),
+        vec![Path::new("RJ2/loose.txt")]
+    );
+}
+
+#[test]
+fn skipping_existing_files_keeps_them_and_writes_only_the_new_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    write_zip(
+        &dir.path().join("RJ3.zip"),
+        &[("Game/save.dat", b"zip"), ("Game/new.txt", b"fresh")],
+    );
+    fs::create_dir_all(dir.path().join("Game")).unwrap();
+    fs::write(dir.path().join("Game/save.dat"), b"mine").unwrap();
+    let mut last = Progress::default();
+
+    extract_with_existing(
+        dir.path(),
+        Encoding::Auto,
+        Existing::Skip,
+        &AtomicBool::new(false),
+        |p| last = p,
+    )
+    .unwrap();
+
+    assert_eq!(fs::read(dir.path().join("Game/save.dat")).unwrap(), b"mine");
+    assert_eq!(fs::read(dir.path().join("Game/new.txt")).unwrap(), b"fresh");
+    assert_eq!(last.files_skipped, 1);
+    assert_eq!(
+        last.files_total, 1,
+        "only the file that gets written counts"
+    );
+    assert_eq!(last.files_done, 1);
+    assert_eq!(last.fraction(), 1.0);
 }

@@ -67,6 +67,7 @@ Tick each on the **desktop** and on the **Deck**.
 | The Sort, UI scale, Debounce and Zip encoding popups open and pick by controller | [ ] | [ ] |
 | One D-pad press moves focus once (Steam Input) | [ ] | [ ] |
 | Extract a zip: progress shows, Cancel works | [ ] | [ ] |
+| Re-extract over existing files: the popup lists them, search filters, Cancel / Overwrite / Skip existing work | [ ] | [ ] |
 | **A real game launches from the gamepad and plays**; play time is saved on exit | [ ] | [ ] |
 | Launcher comes back after the game exits (window restore) | [ ] | [ ] |
 | Mount the drive somewhere else (or copy the folder elsewhere): it still finds `DLSiteLibrary/` | [ ] | [ ] |

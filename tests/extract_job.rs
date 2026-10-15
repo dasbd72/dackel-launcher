@@ -72,7 +72,8 @@ fn progress_ends_at_the_totals_before_the_job_reports_finished() {
             bytes_done: 300_002,
             bytes_total: 300_002,
             files_done: 2,
-            files_total: 2
+            files_total: 2,
+            files_skipped: 0,
         }
     );
 }
@@ -119,8 +120,13 @@ fn a_pre_cancelled_job_reports_cancelled_and_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     write_zip(&dir.path().join("RJ1.zip"), &[("Game/a.txt", b"hello")]);
     let flag = Arc::new(AtomicBool::new(true));
-    let mut job =
-        ExtractJob::start_with_flag(dir.path().to_path_buf(), Encoding::Auto, flag, || {});
+    let mut job = ExtractJob::start_with_flag(
+        dir.path().to_path_buf(),
+        Encoding::Auto,
+        dlsite_launcher::extract::Existing::Overwrite,
+        flag,
+        || {},
+    );
 
     let seen = wait(&mut job);
 
@@ -160,4 +166,51 @@ fn cancelling_a_finished_job_changes_nothing() {
 
     assert_eq!(job.poll(), JobStatus::Finished(Ok(())));
     assert!(dir.path().join("Game/a.txt").exists());
+}
+
+#[test]
+fn a_skipping_job_reports_how_many_files_it_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    write_zip(
+        &dir.path().join("RJ9.zip"),
+        &[("Game/a.txt", b"zip"), ("Game/b.txt", b"b")],
+    );
+    fs::create_dir_all(dir.path().join("Game")).unwrap();
+    fs::write(dir.path().join("Game/a.txt"), b"mine").unwrap();
+    let mut job = ExtractJob::start_with(
+        dir.path().to_path_buf(),
+        Encoding::Auto,
+        dlsite_launcher::extract::Existing::Skip,
+        || {},
+    );
+
+    let seen = wait(&mut job);
+
+    assert_eq!(seen.last(), Some(&JobStatus::Finished(Ok(()))));
+    assert_eq!(job.progress().files_skipped, 1);
+    assert_eq!(fs::read(dir.path().join("Game/a.txt")).unwrap(), b"mine");
+}
+
+#[test]
+fn an_overwrite_check_reports_the_files_a_zip_would_replace() {
+    let dir = tempfile::tempdir().unwrap();
+    write_zip(&dir.path().join("RJ8.zip"), &[("Game/a.txt", b"zip")]);
+    fs::create_dir_all(dir.path().join("Game")).unwrap();
+    fs::write(dir.path().join("Game/a.txt"), b"mine").unwrap();
+    let check = dlsite_launcher::jobs::OverwriteCheck::start(
+        dir.path().to_path_buf(),
+        Encoding::Auto,
+        || {},
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let found = loop {
+        if let Some(found) = check.poll() {
+            break found;
+        }
+        assert!(Instant::now() < deadline, "check did not finish in time");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+
+    assert_eq!(found, Ok(vec![Path::new("Game/a.txt").to_path_buf()]));
 }

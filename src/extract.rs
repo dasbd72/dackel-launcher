@@ -163,6 +163,15 @@ pub struct Progress {
     pub bytes_total: u64,
     pub files_done: u64,
     pub files_total: u64,
+    /// Files left alone because they already existed ([`Existing::Skip`]); not in the totals.
+    pub files_skipped: u64,
+}
+
+/// What to do with a file the zip would write where one already exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Existing {
+    Overwrite,
+    Skip,
 }
 
 impl Progress {
@@ -200,8 +209,15 @@ pub fn extract_cancellable(
     game_dir: &Path,
     encoding: Encoding,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(Progress),
+    progress: impl FnMut(Progress),
 ) -> Result<(), ExtractError> {
+    extract_with_existing(game_dir, encoding, Existing::Overwrite, cancel, progress)
+}
+
+/// What each zip in `game_dir` would write, validated in full, with its output root.
+type Prepared = Vec<(zip::ZipArchive<File>, Vec<PlannedEntry>, PathBuf)>;
+
+fn prepare(game_dir: &Path, encoding: Encoding) -> Result<Prepared, ExtractError> {
     let listed = list(game_dir)?;
     if let Some(kind) = unsupported(game_dir, &listed)? {
         return Err(ExtractError::Unsupported(kind));
@@ -232,6 +248,44 @@ pub fn extract_cancellable(
         };
         jobs.push((archive, plan.entries, root));
     }
+    Ok(jobs)
+}
+
+/// The existing files (relative to `game_dir`) that extracting would replace. Writes nothing.
+pub fn overwrites(game_dir: &Path, encoding: Encoding) -> Result<Vec<PathBuf>, ExtractError> {
+    let mut found = Vec::new();
+    for (_, entries, root) in prepare(game_dir, encoding)? {
+        for entry in entries.iter().filter(|e| !e.is_dir) {
+            let out = root.join(&entry.rel);
+            if out.is_file() {
+                found.push(out.strip_prefix(game_dir).unwrap_or(&out).to_path_buf());
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    Ok(found)
+}
+
+/// Like [`extract_cancellable`], choosing what happens to files that already exist.
+pub fn extract_with_existing(
+    game_dir: &Path,
+    encoding: Encoding,
+    existing: Existing,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(Progress),
+) -> Result<(), ExtractError> {
+    let mut jobs = prepare(game_dir, encoding)?;
+    let mut skipped = 0;
+    if existing == Existing::Skip {
+        for (_, entries, root) in &mut jobs {
+            entries.retain(|e| {
+                let keep = e.is_dir || !root.join(&e.rel).is_file();
+                skipped += u64::from(!keep);
+                keep
+            });
+        }
+    }
 
     let done = Progress {
         bytes_total: jobs.iter().flat_map(|(_, e, _)| e).map(|e| e.size).sum(),
@@ -240,6 +294,7 @@ pub fn extract_cancellable(
             .flat_map(|(_, e, _)| e)
             .filter(|e| !e.is_dir)
             .count() as u64,
+        files_skipped: skipped,
         ..Progress::default()
     };
     progress(done);
