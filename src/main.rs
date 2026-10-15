@@ -9,7 +9,7 @@ use dackel_launcher::extract::{self, Encoding, Existing, Progress, Status};
 use dackel_launcher::fetch::HttpFetch;
 use dackel_launcher::fonts;
 use dackel_launcher::info::{GameInfo, cover_path, load};
-use dackel_launcher::jobs::{ExtractJob, JobStatus, OverwriteCheck};
+use dackel_launcher::jobs::{ExtractJob, JobStatus, OverwriteCheck, extraction_in_progress};
 use dackel_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dackel_launcher::library::{
     Game, Store, add_library, library_labels, may_create_library, resolve_library, scan_all,
@@ -539,7 +539,7 @@ impl App {
     /// there are none, otherwise the user is asked first.
     fn extract_game(&mut self, dir: &std::path::Path) {
         let id = dir.to_string_lossy().into_owned();
-        if self.extracting.contains_key(&id) || self.checking.contains_key(&id) {
+        if extraction_in_progress(&self.extracting, &self.checking, &id) {
             return;
         }
         let Some(ctx) = self.repaint.clone() else {
