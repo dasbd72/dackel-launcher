@@ -5,17 +5,9 @@
 //! `nav::spatial_next`), so the toolbar, the game tiles and the details-page buttons are
 //! all reached the same way.
 
+use dackel_launcher::cursor::Target;
 use dackel_launcher::nav::{Bounds, Control};
 use eframe::egui::{Color32, Rect, Response, Stroke, StrokeKind, Ui};
-
-/// Something the controller can put focus on.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Target {
-    /// A game tile in the library grid, by game id.
-    Game(String),
-    /// A toolbar or details-page control.
-    Control(Control),
-}
 
 const RING: Color32 = Color32::from_rgb(90, 170, 255);
 const RING_WIDTH: f32 = 3.0;

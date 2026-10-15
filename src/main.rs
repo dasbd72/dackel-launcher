@@ -5,7 +5,7 @@ mod icons;
 
 use covers::{BlurCache, CoverView};
 use dackel_launcher::browse::{self, Card, Query, Sort};
-use dackel_launcher::cursor::Cursor;
+use dackel_launcher::cursor::{Cursor, Page, Slot, Target};
 use dackel_launcher::extract::{self, Encoding, Existing, Progress, Status};
 use dackel_launcher::fetch::HttpFetch;
 use dackel_launcher::fonts;
@@ -34,7 +34,7 @@ use dackel_launcher::tuning::reset_prefix;
 use dackel_launcher::window::{self, Restore, RestoreStep};
 use details::{DetailsView, TuningEdit, details_ui, exe_choices};
 use eframe::egui;
-use focus::{FocusFrame, Item, Target, bounds};
+use focus::{FocusFrame, Item, bounds};
 use gilrs::{Axis, Button, EventType, Gilrs};
 use icons::{Icon, icon_button};
 use std::collections::{HashMap, HashSet};
@@ -266,19 +266,8 @@ struct App {
     stick: Repeater,
     /// Drops a press that a second device (Steam's virtual pad) reports again.
     debounce: Debounce,
-    /// The game the controller cursor is on (by id, so it survives rescans and re-sorts).
-    focus_id: Option<String>,
-    /// True until the user moves the cursor: it then tracks the first game as the list re-sorts.
-    focus_auto: bool,
     /// Controller focus, and the selected row of the open popup list.
     cursor: Cursor,
-    /// Set when focus is on a toolbar or details-page control instead of a game tile.
-    control_focus: Option<Control>,
-    /// Where everything focusable was on the last frame; D-pad moves use it.
-    nav_items: Vec<Item>,
-    /// A control the controller pressed with A, consumed by that control next frame.
-    pending_press: Option<Control>,
-    scroll_to_focus: bool,
     settings: Settings,
     settings_path: Option<PathBuf>,
     minimize_on_launch: bool,
@@ -343,13 +332,7 @@ impl App {
             steam_watch: steam_input::Watch::from_env(),
             stick: Repeater::default(),
             debounce: Debounce::new(startup.settings.debounce_ms.unwrap_or(DEFAULT_DEBOUNCE_MS)),
-            focus_id: None,
-            focus_auto: true,
             cursor: Cursor::new(),
-            control_focus: None,
-            nav_items: Vec::new(),
-            pending_press: None,
-            scroll_to_focus: false,
             settings: startup.settings,
             settings_path: startup.settings_path,
             minimize_on_launch: startup.minimize_on_launch,
@@ -791,10 +774,8 @@ impl App {
         let View::Games(entries) = &self.view else {
             return;
         };
-        let on_screen = |id: &String| visible.iter().any(|&i| &entries[i].game.key() == id);
-        if self.focus_auto || !self.focus_id.as_ref().is_some_and(on_screen) {
-            self.focus_id = visible.first().map(|&i| entries[i].game.key().clone());
-        }
+        let keys: Vec<String> = visible.iter().map(|&i| entries[i].game.key()).collect();
+        self.cursor.keep_on_game(&keys);
     }
 
     /// The entry controller commands act on: the open details page, else the cursor.
@@ -803,10 +784,10 @@ impl App {
             return None;
         };
         let id = match &self.screen {
-            Screen::Details(id) => Some(id),
-            Screen::Grid => self.focus_id.as_ref(),
+            Screen::Details(id) => Some(id.as_str()),
+            Screen::Grid => self.cursor.game(),
         }?;
-        entries.iter().position(|e| &e.game.key() == id)
+        entries.iter().position(|e| e.game.key() == id)
     }
 
     fn context(&self) -> Context {
@@ -1100,14 +1081,13 @@ impl App {
     fn open_details_page(&mut self, id: String) {
         self.screen = Screen::Details(id);
         self.details_scroll = 0.0;
-        self.control_focus = Some(Control::Launch);
+        self.cursor.open_details();
     }
 
     /// Back to the library; focus returns to the game that was selected.
     fn close_details_page(&mut self) {
         self.screen = Screen::Grid;
-        self.control_focus = None;
-        self.scroll_to_focus = true;
+        self.cursor.close_details();
     }
 
     /// The values the toolbar dropdowns choose between, as they are now.
@@ -1186,23 +1166,6 @@ impl App {
         }
     }
 
-    /// Keeps controller focus on something that exists on the current screen.
-    fn normalize_control_focus(&mut self) {
-        let on_screen =
-            |c: Control, items: &[Item]| items.iter().any(|i| i.target == Target::Control(c));
-        match (&self.screen, self.control_focus) {
-            // `nav_items` is still the previous screen's layout until the details page has
-            // been drawn once (its Back button is the first thing it registers).
-            (Screen::Details(_), _) if !on_screen(Control::Back, &self.nav_items) => {}
-            // The details page always has focus on one of its controls.
-            (Screen::Details(_), Some(c)) if on_screen(c, &self.nav_items) => {}
-            (Screen::Details(_), _) => self.control_focus = Some(Control::Back),
-            // In the library, focus on a control that is gone goes back to the games.
-            (Screen::Grid, Some(c)) if !on_screen(c, &self.nav_items) => self.control_focus = None,
-            _ => {}
-        }
-    }
-
     /// The game the exe chooser is open for, if it is the popup that is open.
     fn chooser_index(&self) -> Option<usize> {
         match self.popup {
@@ -1224,13 +1187,13 @@ impl App {
 
     fn apply(&mut self, command: Command) {
         match command {
-            Command::Move(dir) => self.move_focus(dir),
+            Command::Move(dir) => self.cursor.move_toward(dir),
             Command::Primary => {
                 // A control with focus is pressed; the library's dropdowns open a list.
-                if let Some(control) = self.control_focus {
+                if let Some(control) = self.cursor.control() {
                     match Picker::for_control(control) {
                         Some(picker) => self.open_picker(picker),
-                        None => self.pending_press = Some(control),
+                        None => self.cursor.press(control),
                     }
                     return;
                 }
@@ -1259,7 +1222,7 @@ impl App {
             }
             Command::Reload => {
                 // In the library, X acts on the focused game, not on a toolbar control.
-                if matches!(self.screen, Screen::Grid) && self.control_focus.is_some() {
+                if matches!(self.screen, Screen::Grid) && self.cursor.control().is_some() {
                     return;
                 }
                 if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view) {
@@ -1273,8 +1236,8 @@ impl App {
                 }
             }
             Command::OpenDetails => {
-                if self.control_focus.is_none()
-                    && let Some(id) = self.focus_id.clone()
+                if self.cursor.control().is_none()
+                    && let Some(id) = self.cursor.game().map(str::to_owned)
                 {
                     self.open_details_page(id);
                 }
@@ -1348,32 +1311,6 @@ impl App {
             }
             Command::ToggleFullscreen => self.toggle_fullscreen(),
             Command::ToggleBlur => self.toggle_blur(),
-        }
-    }
-
-    /// Moves focus to the nearest control or tile in `dir`, using where things were drawn.
-    fn move_focus(&mut self, dir: nav::Dir) {
-        let current = match (&self.control_focus, &self.focus_id) {
-            (Some(c), _) => Target::Control(*c),
-            (None, Some(id)) => Target::Game(id.clone()),
-            (None, None) => return,
-        };
-        let Some(from) = self.nav_items.iter().position(|i| i.target == current) else {
-            return;
-        };
-        let rects: Vec<nav::Bounds> = self.nav_items.iter().map(|i| bounds(i.rect)).collect();
-        let to = nav::spatial_next(&rects, from, dir);
-        match self.nav_items[to].target.clone() {
-            Target::Game(id) => {
-                self.focus_id = Some(id);
-                self.control_focus = None;
-                self.focus_auto = false;
-                self.scroll_to_focus = true;
-            }
-            Target::Control(control) => {
-                self.control_focus = Some(control);
-                self.scroll_to_focus = true;
-            }
         }
     }
 
@@ -1512,11 +1449,14 @@ impl eframe::App for App {
         // Commands can rescan or re-sort; make sure the cursor is still on a visible game.
         let visible = self.visible();
         self.normalize_focus(&visible);
-        self.normalize_control_focus();
+        self.cursor.keep_on_page(match self.screen {
+            Screen::Grid => Page::Grid,
+            Screen::Details(_) => Page::Details,
+        });
         let mut frame = FocusFrame::new(
-            self.control_focus,
-            self.pending_press.take(),
-            self.scroll_to_focus,
+            self.cursor.control(),
+            self.cursor.take_press(),
+            self.cursor.scroll_requested(),
         );
         // Apply a requested zoom; otherwise notice egui's own Ctrl +/- zoom and remember it.
         if let Some(zoom) = self.zoom_request.take() {
@@ -1839,8 +1779,9 @@ impl eframe::App for App {
                                             &self.checking,
                                             &entry.game.dir_key(),
                                         ),
-                                        focused: self.control_focus.is_none()
-                                            && self.focus_id.as_ref() == Some(&entry.game.key()),
+                                        focused: self.cursor.control().is_none()
+                                            && self.cursor.game()
+                                                == Some(entry.game.key().as_str()),
                                         cover_file,
                                         cover_view,
                                     };
@@ -1849,7 +1790,7 @@ impl eframe::App for App {
                                         target: Target::Game(entry.game.key().clone()),
                                         rect: action.rect,
                                     });
-                                    if tile.focused && self.scroll_to_focus {
+                                    if tile.focused && self.cursor.scroll_requested() {
                                         ui.scroll_to_rect(action.rect.expand(8.0), None);
                                     }
                                     if action.clicked
@@ -1929,8 +1870,15 @@ impl eframe::App for App {
             self.apply_tuning(result);
         }
 
-        self.nav_items = std::mem::take(&mut frame.items);
-        self.scroll_to_focus = false;
+        self.cursor.end_frame(
+            std::mem::take(&mut frame.items)
+                .into_iter()
+                .map(|item| Slot {
+                    target: item.target,
+                    bounds: bounds(item.rect),
+                })
+                .collect(),
+        );
         if let Some((picker, index)) = picker_pick {
             self.close_picker();
             self.pick(picker, index);
@@ -1939,9 +1887,7 @@ impl eframe::App for App {
             self.close_picker();
         }
         if let Some(id) = clicked_focus {
-            self.focus_id = Some(id);
-            self.control_focus = None;
-            self.focus_auto = false;
+            self.cursor.select_game(id);
         }
         for id in cancel_ids {
             self.cancel_extraction(&id);
