@@ -314,3 +314,23 @@ fn a_072project_tag_without_the_t_prefix_is_kept_as_it_is() {
 
     assert_eq!(read_info(&game)["genres"], serde_json::json!(["Plain"]));
 }
+
+#[test]
+fn project072_tag_keys_drop_the_t_and_whatever_separator_follows_it() {
+    let lib = tempfile::tempdir().unwrap();
+    let game = game_in(lib.path(), "RA25128779");
+    let body = r#"{"developer":"PAON","locale":{"locale_title":"T","locale_summary":"s","cover_img":null},"tags":[
+        {"tag_id":1,"name_tkey":"T_Alpha"},
+        {"tag_id":13,"name_tkey":"T＿Delta"},
+        {"tag_id":24,"name_tkey":"T _Gamma"},
+        {"tag_id":30,"name_tkey":"Tiny"}
+    ]}"#;
+    let site = Site::default().with(PROJECT072_URL, body.as_bytes());
+
+    refresh(&game, &site).unwrap();
+
+    assert_eq!(
+        read_info(&game)["genres"],
+        serde_json::json!(["Alpha", "Delta", "Gamma", "Tiny"])
+    );
+}

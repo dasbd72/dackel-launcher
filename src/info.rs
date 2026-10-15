@@ -153,6 +153,14 @@ struct Project072Tag {
     name_tkey: String,
 }
 
+/// The tag name in a translation key such as `T_Alpha`, `T＿Epsilon` or `T _Gamma`: the text after
+/// the `T` and the separator the site puts there. A key without that separator is kept whole.
+fn tag_name(key: &str) -> &str {
+    let rest = key.strip_prefix('T').unwrap_or(key);
+    let name = rest.trim_start_matches(['_', '＿', ' ']);
+    if name.len() < rest.len() { name } else { key }
+}
+
 fn parse_072project(id: &str, body: &[u8]) -> Option<(GameInfo, Option<String>)> {
     let product: Project072Product = serde_json::from_slice(body).ok()?;
     let title = product.locale.locale_title.trim().to_owned();
@@ -163,16 +171,10 @@ fn parse_072project(id: &str, body: &[u8]) -> Option<(GameInfo, Option<String>)>
         id: id.to_owned(),
         title,
         circle: product.developer.filter(|d| !d.trim().is_empty()),
-        // Tag keys are translation keys such as `T_Alpha`; the text after `T_` is the tag name.
         genres: product
             .tags
             .iter()
-            .map(|tag| {
-                tag.name_tkey
-                    .strip_prefix("T_")
-                    .unwrap_or(&tag.name_tkey)
-                    .to_owned()
-            })
+            .map(|tag| tag_name(&tag.name_tkey).to_owned())
             .collect(),
         description: product.locale.locale_summary.unwrap_or_default(),
         cover: None,
