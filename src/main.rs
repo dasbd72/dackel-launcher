@@ -15,9 +15,9 @@ use dackel_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dackel_launcher::library::{Game, Store, library_labels, resolve_library, scan_all, store_of};
 use dackel_launcher::library_list::LibraryList;
 use dackel_launcher::nav::{
-    self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Debounce, Input,
-    Repeater,
+    self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Input,
 };
+use dackel_launcher::pad::Pad;
 use dackel_launcher::pickers::{
     self, Choice, ENCODINGS, Picker, PickerList, SORTS, Selection, debounce_label, encoding_label,
     sort_label,
@@ -27,13 +27,11 @@ use dackel_launcher::profile::{self, ExeState, Stats};
 use dackel_launcher::proton::{self, ProtonChoice};
 use dackel_launcher::reload::Infos;
 use dackel_launcher::settings::{self, Settings};
-use dackel_launcher::steam_input;
 use dackel_launcher::tuning::reset_prefix;
 use dackel_launcher::window::{self, RestoreStep, WindowCommand, WindowState};
 use details::{DetailsView, TuningEdit, details_ui, exe_choices};
 use eframe::egui;
 use focus::{FocusFrame, Item, bounds};
-use gilrs::{Axis, Button, EventType, Gilrs};
 use icons::{Icon, icon_button};
 use std::collections::HashSet;
 use std::io::ErrorKind;
@@ -233,8 +231,6 @@ struct App {
     popup: Option<Popup>,
     /// How far down the details page is scrolled, in points.
     details_scroll: f32,
-    /// What the left stick asks the details page to do this frame (-1.0 down .. 1.0 up).
-    pad_scroll: f32,
     /// The details page's Launch options form.
     tuning_edit: Option<TuningEdit>,
     view: View,
@@ -245,11 +241,8 @@ struct App {
     launcher: Launcher<UmuSpawner>,
     screen: Screen,
     query: Query,
-    gilrs: Option<Gilrs>,
-    steam_watch: steam_input::Watch,
-    stick: Repeater,
-    /// Drops a press that a second device (Steam's virtual pad) reports again.
-    debounce: Debounce,
+    /// The gamepad: its inputs, the stick's scroll request, the press debounce.
+    pad: Pad,
     /// Controller focus, and the selected row of the open popup list.
     cursor: Cursor,
     settings: Settings,
@@ -277,7 +270,6 @@ impl App {
             libraries,
             popup: None,
             details_scroll: 0.0,
-            pad_scroll: 0.0,
             tuning_edit: None,
             view: View::Missing,
             encoding: Encoding::Auto,
@@ -290,12 +282,7 @@ impl App {
                 favorites_only: false,
                 sort: Sort::Title,
             },
-            gilrs: Gilrs::new()
-                .map_err(|err| eprintln!("gamepad support unavailable: {err}"))
-                .ok(),
-            steam_watch: steam_input::Watch::from_env(),
-            stick: Repeater::default(),
-            debounce: Debounce::new(startup.settings.debounce_ms.unwrap_or(DEFAULT_DEBOUNCE_MS)),
+            pad: Pad::new(startup.settings.debounce_ms.unwrap_or(DEFAULT_DEBOUNCE_MS)),
             cursor: Cursor::new(),
             settings: startup.settings,
             settings_path: startup.settings_path,
@@ -846,7 +833,7 @@ impl App {
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         let total = prompt.files.len();
-        let stick = self.pad_scroll * PAD_SCROLL_SPEED * ctx.input(|i| i.stable_dt).min(0.1);
+        let stick = self.pad.scroll() * PAD_SCROLL_SPEED * ctx.input(|i| i.stable_dt).min(0.1);
         let mut answer = None;
         egui::Window::new("Overwrite files?")
             .collapsible(false)
@@ -974,7 +961,7 @@ impl App {
     }
 
     fn set_debounce(&mut self, ms: u64) {
-        self.debounce.set_window(ms);
+        self.pad.set_debounce_window(ms);
         self.settings.debounce_ms = Some(ms);
         self.save_settings();
     }
@@ -1003,7 +990,7 @@ impl App {
             sort: self.query.sort,
             encoding: self.encoding,
             scale: self.window.scale(),
-            debounce_ms: self.debounce.window(),
+            debounce_ms: self.pad.debounce_window(),
             libraries: self.libraries.roots(),
             library_filter: self.libraries.filter(),
         }
@@ -1222,33 +1209,10 @@ impl App {
         let now_ms = (ctx.input(|i| i.time) * 1000.0) as u64;
         // Ignore the pad while another window (a running game) has focus.
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
-        if let Some(gilrs) = &mut self.gilrs {
-            while let Some(event) = gilrs.next_event() {
-                self.steam_watch.pad_seen();
-                if let (true, EventType::ButtonPressed(button, _)) = (focused, event.event)
-                    && let Some(input) = pad_input(button)
-                {
-                    inputs.push(input);
-                }
-            }
-            let stick = gilrs
-                .gamepads()
-                .map(|(_, pad)| (pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY)))
-                .find(|&(x, y)| nav::stick_dir(x, y).is_some())
-                .unwrap_or((0.0, 0.0));
-            // On the details page, pushing the stick up or down scrolls instead of moving focus.
-            let scroll = if (on_details
-                || self.popup.as_ref().is_some_and(Popup::scrolls_with_stick))
-                && focused
-            {
-                nav::stick_scroll(stick.0, stick.1)
-            } else {
-                0.0
-            };
-            self.pad_scroll = scroll;
-            let held = nav::stick_dir(stick.0, stick.1).filter(|_| scroll == 0.0);
-            let fired = self.stick.update(now_ms, held.filter(|_| focused));
-            inputs.extend(fired.map(dir_input));
+        // On the details page, pushing the stick up or down scrolls instead of moving focus.
+        let scrolls = on_details || self.popup.as_ref().is_some_and(Popup::scrolls_with_stick);
+        if let Some(pad_inputs) = self.pad.poll(now_ms, focused, scrolls) {
+            inputs.extend(pad_inputs);
             ctx.request_repaint_after(Duration::from_millis(33));
         }
         if !ctx.egui_wants_keyboard_input() {
@@ -1257,7 +1221,7 @@ impl App {
                     if i.key_pressed(*key) {
                         inputs.push(*input);
                         if matches!(input, Input::Up | Input::Down | Input::Left | Input::Right)
-                            && let Some(hint) = self.steam_watch.arrow_pressed()
+                            && let Some(hint) = self.pad.arrow_pressed()
                         {
                             self.message = Some(hint.to_owned());
                         }
@@ -1266,8 +1230,7 @@ impl App {
             });
         }
         let now_ms = self.started.elapsed().as_millis() as u64;
-        inputs.retain(|input| self.debounce.accept(now_ms, *input));
-        inputs
+        self.pad.debounced(now_ms, inputs)
     }
 
     /// Only reached from the "Create it" button, which is shown only when it is allowed.
@@ -1433,11 +1396,11 @@ impl eframe::App for App {
                 let response = egui::ComboBox::from_id_salt("debounce")
                     .selected_text(format!(
                         "Debounce {}",
-                        debounce_label(self.debounce.window())
+                        debounce_label(self.pad.debounce_window())
                     ))
                     .show_ui(ui, |ui| {
                         for ms in DEBOUNCE_PRESETS_MS {
-                            let on = ms == self.debounce.window();
+                            let on = ms == self.pad.debounce_window();
                             if ui.selectable_label(on, debounce_label(ms)).clicked() {
                                 picked_debounce = Some(ms);
                             }
@@ -1607,7 +1570,7 @@ impl eframe::App for App {
                 // Left stick: scroll at up to SCROLL_SPEED points per second.
                 let dt = ui.ctx().input(|i| i.stable_dt).min(0.1);
                 self.details_scroll =
-                    (self.details_scroll - self.pad_scroll * PAD_SCROLL_SPEED * dt).max(0.0);
+                    (self.details_scroll - self.pad.scroll() * PAD_SCROLL_SPEED * dt).max(0.0);
                 let action = details_ui(ui, &view, &mut frame, edit, &mut self.details_scroll);
                 tuning_action = Some(TuningResult {
                     dir: entry.game.dir.clone(),
@@ -2035,31 +1998,6 @@ const KEYBOARD: &[(egui::Key, Input)] = &[
     (egui::Key::F11, Input::ToggleFullscreen),
     (egui::Key::B, Input::ToggleBlur),
 ];
-
-fn pad_input(button: Button) -> Option<Input> {
-    Some(match button {
-        Button::DPadUp => Input::Up,
-        Button::DPadDown => Input::Down,
-        Button::DPadLeft => Input::Left,
-        Button::DPadRight => Input::Right,
-        Button::South => Input::A,
-        Button::East => Input::B,
-        Button::West => Input::X,
-        Button::North => Input::Y,
-        Button::Start => Input::Start,
-        Button::Select => Input::Select,
-        _ => return None,
-    })
-}
-
-fn dir_input(dir: nav::Dir) -> Input {
-    match dir {
-        nav::Dir::Up => Input::Up,
-        nav::Dir::Down => Input::Down,
-        nav::Dir::Left => Input::Left,
-        nav::Dir::Right => Input::Right,
-    }
-}
 
 enum PickerEvent {
     Pick(usize),
