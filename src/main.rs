@@ -12,10 +12,8 @@ use dackel_launcher::fonts;
 use dackel_launcher::info::{GameInfo, cover_path, load};
 use dackel_launcher::jobs::{ExtractJob, JobStatus, OverwriteCheck, extraction_in_progress};
 use dackel_launcher::launch::{Launcher, UmuSpawner, unix_now};
-use dackel_launcher::library::{
-    Game, Store, add_library, library_labels, may_create_library, resolve_library, scan_all,
-    store_of, unique_roots,
-};
+use dackel_launcher::library::{Game, Store, library_labels, resolve_library, scan_all, store_of};
+use dackel_launcher::library_list::LibraryList;
 use dackel_launcher::nav::{
     self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Debounce, Input,
     Repeater,
@@ -229,16 +227,8 @@ enum PromptOption {
 }
 
 struct App {
-    /// The library beside the binary (or `--library`); always first in `libraries`.
-    library: PathBuf,
-    /// Whether "Create it" is offered for the folder beside the program.
-    can_create_library: bool,
-    /// Every library in use: `library`, then the ones added on this machine.
-    libraries: Vec<PathBuf>,
-    /// Libraries that could not be read at the last scan (drive unplugged, folder gone).
-    offline: Vec<PathBuf>,
-    /// Show only games from this entry of `libraries`.
-    library_filter: Option<usize>,
+    /// The libraries in use, which could not be read, the filter and the "add a folder" form.
+    libraries: LibraryList,
     /// The popup that is open, if any.
     popup: Option<Popup>,
     /// How far down the details page is scrolled, in points.
@@ -249,8 +239,6 @@ struct App {
     checking: HashMap<String, OverwriteCheck>,
     /// The details page's Launch options form.
     tuning_edit: Option<TuningEdit>,
-    library_input: String,
-    library_error: Option<String>,
     view: View,
     encoding: Encoding,
     message: Option<String>,
@@ -283,29 +271,19 @@ struct App {
 
 impl App {
     fn new(library: PathBuf, startup: Startup) -> Self {
-        let can_create_library = may_create_library(&library);
         // A folder listed twice (say, the one beside the program added again) shows once.
-        let all: Vec<PathBuf> = std::iter::once(library.clone())
-            .chain(startup.settings.libraries.iter().cloned())
-            .collect();
-        let libraries = unique_roots(&all);
+        let libraries = LibraryList::new(library, &startup.settings.libraries);
         let mut startup = startup;
-        let added = libraries[1..].to_vec();
+        let added = libraries.added().to_vec();
         let tidy = startup.settings.libraries != added;
         startup.settings.libraries = added;
         let mut app = App {
-            library,
-            can_create_library,
             libraries,
-            offline: Vec::new(),
-            library_filter: None,
             popup: None,
             details_scroll: 0.0,
             pad_scroll: 0.0,
             checking: HashMap::new(),
             tuning_edit: None,
-            library_input: String::new(),
-            library_error: None,
             view: View::Missing,
             encoding: Encoding::Auto,
             message: None,
@@ -354,12 +332,14 @@ impl App {
             .chain(self.checking.keys())
             .cloned()
             .collect();
-        let scans = scan_all(&self.libraries);
-        self.offline = scans
-            .iter()
-            .filter(|s| s.games.is_err())
-            .map(|s| s.root.clone())
-            .collect();
+        let scans = scan_all(self.libraries.roots());
+        self.libraries.set_offline(
+            scans
+                .iter()
+                .filter(|s| s.games.is_err())
+                .map(|s| s.root.clone())
+                .collect(),
+        );
         let primary_error = scans
             .first()
             .and_then(|s| s.games.as_ref().err())
@@ -369,16 +349,17 @@ impl App {
             .filter_map(|s| s.games.ok())
             .flatten()
             .collect();
-        let nothing_readable = games.is_empty() && self.offline.len() == self.libraries.len();
+        let nothing_readable = games.is_empty() && self.libraries.all_offline();
         self.view = match primary_error {
             // Nothing readable and nothing configured: the empty state, with a way to add one.
-            Some((ErrorKind::NotFound, _)) if nothing_readable && self.libraries.len() == 1 => {
+            Some((ErrorKind::NotFound, _)) if nothing_readable && self.libraries.count() == 1 => {
                 View::Missing
             }
             // A configured folder is missing: name it, since the system error does not.
             Some((ErrorKind::NotFound, _)) if nothing_readable => {
                 let missing: Vec<String> = self
-                    .offline
+                    .libraries
+                    .offline()
                     .iter()
                     .map(|root| root.display().to_string())
                     .collect();
@@ -422,10 +403,13 @@ impl App {
         {
             self.message = None;
         }
-        if !self.offline.is_empty() && self.message.is_none() && matches!(self.view, View::Games(_))
+        if !self.libraries.offline().is_empty()
+            && self.message.is_none()
+            && matches!(self.view, View::Games(_))
         {
             let names: Vec<String> = self
-                .offline
+                .libraries
+                .offline()
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect();
@@ -742,19 +726,13 @@ impl App {
             .collect();
         browse::browse(&cards, &self.query)
             .into_iter()
-            .filter(|&i| {
-                self.library_filter
-                    .is_none_or(|slot| entries[i].game.slot == slot)
-            })
+            .filter(|&i| self.libraries.shows_slot(entries[i].game.slot))
             .collect()
     }
 
     /// The name to show beside a game's library; `None` with a single library.
     fn library_label(&self, game: &Game) -> Option<String> {
-        if self.libraries.len() < 2 {
-            return None;
-        }
-        library_labels(&self.libraries).into_iter().nth(game.slot)
+        self.libraries.label_of(game.slot)
     }
 
     /// Keeps the cursor on a game that is on screen, so focus is never lost.
@@ -959,6 +937,13 @@ impl App {
         let mut remove: Option<usize> = None;
         let mut add = false;
         let mut close = false;
+        let rows: Vec<(usize, PathBuf, bool)> = self
+            .libraries
+            .listed()
+            .into_iter()
+            .map(|(i, root)| (i, root.clone(), self.libraries.is_offline(root)))
+            .collect();
+        let error = self.libraries.error().map(str::to_owned);
         egui::Window::new("Libraries")
             .collapsible(false)
             .resizable(false)
@@ -966,17 +951,14 @@ impl App {
             .show(ctx, |ui| {
                 // The library beside the program is listed only when it was found, and it
                 // cannot be removed. Added libraries are listed even when offline.
-                let shown = |i: usize, root: &PathBuf| i > 0 || !self.offline.contains(root);
-                if !self.libraries.iter().enumerate().any(|(i, r)| shown(i, r)) {
+                if rows.is_empty() {
                     ui.weak("No libraries found.");
                 }
-                for (i, root) in self.libraries.iter().enumerate() {
-                    if !shown(i, root) {
-                        continue;
-                    }
+                for (i, root, offline) in &rows {
+                    let i = *i;
                     ui.horizontal(|ui| {
                         ui.label(root.display().to_string());
-                        if self.offline.contains(root) {
+                        if *offline {
                             ui.colored_label(egui::Color32::YELLOW, "not found");
                         }
                         if i == 0 {
@@ -990,7 +972,7 @@ impl App {
                 ui.label("Add a folder that contains RJ game folders:");
                 ui.horizontal(|ui| {
                     let edit = ui.add(
-                        egui::TextEdit::singleline(&mut self.library_input)
+                        egui::TextEdit::singleline(self.libraries.input_mut())
                             .desired_width(420.0)
                             .hint_text("/path/to/games"),
                     );
@@ -999,35 +981,26 @@ impl App {
                         add = true;
                     }
                 });
-                if let Some(err) = &self.library_error {
+                if let Some(err) = &error {
                     ui.colored_label(egui::Color32::LIGHT_RED, err);
                 }
                 if ui.button("Close").clicked() {
                     close = true;
                 }
             });
-        if add {
-            match add_library(&self.libraries, &self.library_input) {
-                Ok(path) => {
-                    self.settings.libraries.push(path.clone());
-                    self.libraries.push(path);
-                    self.library_input.clear();
-                    self.library_error = None;
-                    self.save_settings();
-                    self.rescan();
-                }
-                Err(err) => self.library_error = Some(err.to_string()),
-            }
+        if add && let Ok(path) = self.libraries.add_typed() {
+            self.settings.libraries.push(path);
+            self.save_settings();
+            self.rescan();
         }
-        if let Some(i) = remove {
-            let gone = self.libraries.remove(i);
+        if let Some(removed) = remove.and_then(|i| self.libraries.remove(i)) {
+            let gone = removed.root;
             self.settings.libraries.retain(|l| *l != gone);
             // Later slots move up, so keys, the filter and the open page would point at the
-            // wrong games: go back to the grid with no filter.
-            self.library_filter = None;
+            // wrong games: go back to the grid with no filter (the list cleared the filter).
             self.close_details_page();
             // Stop extracting into a folder that is no longer listed anywhere.
-            if !self.libraries.contains(&gone) {
+            if !removed.still_listed {
                 let running: Vec<String> = self
                     .extracting
                     .keys()
@@ -1046,7 +1019,7 @@ impl App {
             if matches!(self.popup, Some(Popup::Libraries)) {
                 self.popup = None;
             }
-            self.library_error = None;
+            self.libraries.clear_error();
         }
     }
 
@@ -1081,8 +1054,8 @@ impl App {
             encoding: self.encoding,
             scale: self.window.scale(),
             debounce_ms: self.debounce.window(),
-            libraries: &self.libraries,
-            library_filter: self.library_filter,
+            libraries: self.libraries.roots(),
+            library_filter: self.libraries.filter(),
         }
     }
 
@@ -1140,10 +1113,10 @@ impl App {
     }
 
     fn pick(&mut self, picker: Picker, index: usize) {
-        match pickers::pick(picker, index, self.libraries.len()) {
+        match pickers::pick(picker, index, self.libraries.count()) {
             Some(Choice::Sort(sort)) => self.query.sort = sort,
             Some(Choice::Encoding(encoding)) => self.encoding = encoding,
-            Some(Choice::LibraryFilter(slot)) => self.library_filter = slot,
+            Some(Choice::LibraryFilter(slot)) => self.libraries.set_filter(slot),
             Some(Choice::Debounce(ms)) => self.set_debounce(ms),
             Some(Choice::Scale(scale)) => self.set_ui_scale(scale),
             None => {}
@@ -1355,7 +1328,7 @@ impl App {
 
     /// Only reached from the "Create it" button, which is shown only when it is allowed.
     fn create_library(&mut self) {
-        match std::fs::create_dir_all(&self.library) {
+        match std::fs::create_dir_all(self.libraries.beside()) {
             Ok(()) => self.rescan(),
             Err(err) => self.view = View::Error(err.to_string()),
         }
@@ -1556,10 +1529,11 @@ impl eframe::App for App {
                         .response
                         .on_hover_text(SORT_HELP);
                     frame.register(ui, Control::Sort, &response);
-                    if self.libraries.len() > 1 {
-                        let labels = library_labels(&self.libraries);
+                    if self.libraries.count() > 1 {
+                        let labels = library_labels(self.libraries.roots());
                         let shown = self
-                            .library_filter
+                            .libraries
+                            .filter()
                             .and_then(|slot| labels.get(slot))
                             .map_or("All libraries", String::as_str);
                         let response = egui::ComboBox::from_id_salt("library-filter")
@@ -1567,17 +1541,17 @@ impl eframe::App for App {
                             .show_ui(ui, |ui| {
                                 if ui
                                     .selectable_label(
-                                        self.library_filter.is_none(),
+                                        self.libraries.filter().is_none(),
                                         "All libraries",
                                     )
                                     .clicked()
                                 {
-                                    self.library_filter = None;
+                                    self.libraries.set_filter(None);
                                 }
                                 for (slot, label) in labels.iter().enumerate() {
-                                    let on = self.library_filter == Some(slot);
+                                    let on = self.libraries.filter() == Some(slot);
                                     if ui.selectable_label(on, label).clicked() {
-                                        self.library_filter = Some(slot);
+                                        self.libraries.set_filter(Some(slot));
                                     }
                                 }
                             })
@@ -1628,9 +1602,12 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ui, |ui| match (&self.screen, &self.view) {
             (_, View::Missing) => {
-                if self.can_create_library {
+                if self.libraries.can_create() {
                     ui.heading("Library not found");
-                    ui.label(format!("{} does not exist.", self.library.display()));
+                    ui.label(format!(
+                        "{} does not exist.",
+                        self.libraries.beside().display()
+                    ));
                     if ui.button("Create it").clicked() {
                         create = true;
                     }
