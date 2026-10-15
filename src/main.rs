@@ -244,8 +244,6 @@ struct App {
     details_scroll: f32,
     /// What the left stick asks the details page to do this frame (-1.0 down .. 1.0 up).
     pad_scroll: f32,
-    /// Shown when a game's pinned Proton is not installed on this machine.
-    proton_prompt: Option<ProtonPrompt>,
     overwrite_prompt: Option<OverwritePrompt>,
     /// Looking for files an extraction would overwrite, by game folder.
     checking: HashMap<String, OverwriteCheck>,
@@ -320,7 +318,6 @@ impl App {
             popup: None,
             details_scroll: 0.0,
             pad_scroll: 0.0,
-            proton_prompt: None,
             overwrite_prompt: None,
             checking: HashMap::new(),
             tuning_edit: None,
@@ -640,12 +637,13 @@ impl App {
             }
             Ok(ProtonChoice::Mismatch { pinned, newest }) => {
                 self.list_sel = 0;
-                self.proton_prompt = Some(ProtonPrompt {
+                // Shown when a game's pinned Proton is not installed on this machine.
+                self.popup = Some(Popup::Proton(ProtonPrompt {
                     dir,
                     pinned,
                     newest,
                     choosing: false,
-                });
+                }));
             }
         }
     }
@@ -685,7 +683,7 @@ impl App {
     /// The user's answer to the missing-Proton prompt: launch with `proton`, and once the
     /// game has started, pin that version instead of the missing one.
     fn launch_with_other_proton(&mut self, proton: Option<PathBuf>) {
-        let Some(prompt) = self.proton_prompt.take() else {
+        let Some(prompt) = self.take_proton_prompt() else {
             return;
         };
         if self.start_game(&prompt.dir, proton.as_deref()) {
@@ -701,7 +699,7 @@ impl App {
 
     /// The choices the missing-Proton prompt offers right now.
     fn prompt_options(&self) -> Vec<(PromptOption, String)> {
-        let Some(prompt) = &self.proton_prompt else {
+        let Some(prompt) = self.popup.as_ref().and_then(Popup::as_proton) else {
             return Vec::new();
         };
         let name = |p: &Path| {
@@ -731,11 +729,15 @@ impl App {
     fn answer_prompt(&mut self, option: PromptOption) {
         match option {
             PromptOption::Newest => {
-                let newest = self.proton_prompt.as_ref().and_then(|p| p.newest.clone());
+                let newest = self
+                    .popup
+                    .as_ref()
+                    .and_then(Popup::as_proton)
+                    .and_then(|p| p.newest.clone());
                 self.launch_with_other_proton(newest);
             }
             PromptOption::Another => {
-                if let Some(prompt) = &mut self.proton_prompt {
+                if let Some(prompt) = self.popup.as_mut().and_then(Popup::as_proton_mut) {
                     prompt.choosing = true;
                 }
                 self.list_sel = 0;
@@ -808,7 +810,7 @@ impl App {
     }
 
     fn context(&self) -> Context {
-        if self.popup.is_some() || self.proton_prompt.is_some() || self.overwrite_prompt.is_some() {
+        if self.popup.is_some() || self.overwrite_prompt.is_some() {
             Context::Chooser
         } else if matches!(self.screen, Screen::Details(_)) {
             Context::Details
@@ -885,7 +887,7 @@ impl App {
 
     /// Asks what to do when a game's pinned Proton is not installed here.
     fn proton_prompt_window(&mut self, ctx: &egui::Context) {
-        let Some(prompt) = &self.proton_prompt else {
+        let Some(prompt) = self.popup.as_ref().and_then(Popup::as_proton) else {
             return;
         };
         let options = self.prompt_options();
@@ -921,7 +923,7 @@ impl App {
         if let Some(option) = answer {
             self.answer_prompt(option);
         } else if cancel {
-            self.proton_prompt = None;
+            self.popup = None;
         }
     }
 
@@ -1135,6 +1137,21 @@ impl App {
         }
     }
 
+    fn proton_prompt_open(&self) -> bool {
+        self.popup.as_ref().and_then(Popup::as_proton).is_some()
+    }
+
+    /// Takes the missing-Proton prompt, closing it. Any other popup is left open.
+    fn take_proton_prompt(&mut self) -> Option<ProtonPrompt> {
+        match self.popup.take() {
+            Some(Popup::Proton(prompt)) => Some(prompt),
+            other => {
+                self.popup = other;
+                None
+            }
+        }
+    }
+
     fn open_picker(&mut self, picker: Picker) {
         self.list_sel = self.picker_list(picker).current;
         self.popup = Some(Popup::Picker(picker));
@@ -1260,7 +1277,7 @@ impl App {
             Command::ChooserMove(delta) => {
                 let len = match self.picker_open() {
                     _ if self.overwrite_prompt.is_some() => OVERWRITE_CHOICES.len(),
-                    _ if self.proton_prompt.is_some() => self.prompt_options().len(),
+                    _ if self.proton_prompt_open() => self.prompt_options().len(),
                     Some(picker) => self.picker_list(picker).labels.len(),
                     None => match &self.view {
                         View::Games(entries) => self
@@ -1278,7 +1295,7 @@ impl App {
                     self.answer_overwrite(self.list_sel);
                     return;
                 }
-                if self.proton_prompt.is_some() {
+                if self.proton_prompt_open() {
                     if let Some((option, _)) = self.prompt_options().into_iter().nth(self.list_sel)
                     {
                         self.answer_prompt(option);
@@ -1308,7 +1325,6 @@ impl App {
             }
             Command::ChooserCancel => {
                 self.popup = None;
-                self.proton_prompt = None;
                 self.overwrite_prompt = None;
             }
             Command::ToggleFullscreen => self.toggle_fullscreen(),
@@ -1881,7 +1897,7 @@ impl eframe::App for App {
         if matches!(self.popup, Some(Popup::Libraries)) {
             self.libraries_window(ui.ctx());
         }
-        if self.proton_prompt.is_some() {
+        if self.proton_prompt_open() {
             self.proton_prompt_window(ui.ctx());
         }
         if self.overwrite_prompt.is_some() {
