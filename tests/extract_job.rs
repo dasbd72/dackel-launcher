@@ -1,6 +1,5 @@
 use dackel_launcher::extract::{Encoding, Progress};
-use dackel_launcher::jobs::{ExtractJob, JobStatus, OverwriteCheck, extraction_in_progress};
-use std::collections::HashMap;
+use dackel_launcher::jobs::{ExtractJob, JobStatus};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -214,42 +213,4 @@ fn an_overwrite_check_reports_the_files_a_zip_would_replace() {
     };
 
     assert_eq!(found, Ok(vec![Path::new("Game/a.txt").to_path_buf()]));
-}
-
-#[test]
-fn a_game_is_in_progress_while_it_extracts_or_while_its_files_are_checked() {
-    let dir = tempfile::tempdir().unwrap();
-    let key = dir.path().to_string_lossy().into_owned();
-    let mut extracting: HashMap<String, ExtractJob> = HashMap::new();
-    let mut checking: HashMap<String, OverwriteCheck> = HashMap::new();
-
-    assert!(!extraction_in_progress(&extracting, &checking, &key));
-
-    extracting.insert(
-        key.clone(),
-        ExtractJob::start(dir.path().to_path_buf(), Encoding::Auto, || {}),
-    );
-    assert!(extraction_in_progress(&extracting, &checking, &key));
-
-    extracting.clear();
-    checking.insert(
-        key.clone(),
-        OverwriteCheck::start(dir.path().to_path_buf(), Encoding::Auto, || {}),
-    );
-    assert!(extraction_in_progress(&extracting, &checking, &key));
-}
-
-#[test]
-fn another_games_extraction_does_not_make_this_game_in_progress() {
-    let dir = tempfile::tempdir().unwrap();
-    let other = tempfile::tempdir().unwrap();
-    let mut extracting: HashMap<String, ExtractJob> = HashMap::new();
-    let checking: HashMap<String, OverwriteCheck> = HashMap::new();
-    extracting.insert(
-        other.path().to_string_lossy().into_owned(),
-        ExtractJob::start(other.path().to_path_buf(), Encoding::Auto, || {}),
-    );
-
-    let key = dir.path().to_string_lossy().into_owned();
-    assert!(!extraction_in_progress(&extracting, &checking, &key));
 }

@@ -10,7 +10,7 @@ use dackel_launcher::extract::{self, Encoding, Existing, Progress, Status};
 use dackel_launcher::fetch::HttpFetch;
 use dackel_launcher::fonts;
 use dackel_launcher::info::{GameInfo, cover_path, load};
-use dackel_launcher::jobs::{ExtractJob, JobStatus, OverwriteCheck, extraction_in_progress};
+use dackel_launcher::jobs::{Cancelled, ExtractJob, JobStatus, Jobs, OverwriteCheck};
 use dackel_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dackel_launcher::library::{Game, Store, library_labels, resolve_library, scan_all, store_of};
 use dackel_launcher::library_list::LibraryList;
@@ -235,8 +235,6 @@ struct App {
     details_scroll: f32,
     /// What the left stick asks the details page to do this frame (-1.0 down .. 1.0 up).
     pad_scroll: f32,
-    /// Looking for files an extraction would overwrite, by game folder.
-    checking: HashMap<String, OverwriteCheck>,
     /// The details page's Launch options form.
     tuning_edit: Option<TuningEdit>,
     view: View,
@@ -261,8 +259,8 @@ struct App {
     /// Fullscreen, UI scale, and bringing the window back after a game; its changes are sent
     /// to egui at the end of the frame.
     window: WindowState,
-    /// Extractions running in the background, by game id.
-    extracting: HashMap<String, ExtractJob>,
+    /// Extractions and overwrite checks running in the background, by game folder.
+    jobs: Jobs,
     blur_cache: BlurCache,
     /// Lets background work ask the window to redraw; set on the first frame.
     repaint: Option<egui::Context>,
@@ -282,7 +280,6 @@ impl App {
             popup: None,
             details_scroll: 0.0,
             pad_scroll: 0.0,
-            checking: HashMap::new(),
             tuning_edit: None,
             view: View::Missing,
             encoding: Encoding::Auto,
@@ -312,7 +309,7 @@ impl App {
                 startup.scale,
                 startup.minimize_on_launch,
             ),
-            extracting: HashMap::new(),
+            jobs: Jobs::new(),
             blur_cache: BlurCache::default(),
             repaint: None,
             started: std::time::Instant::now(),
@@ -326,12 +323,7 @@ impl App {
 
     fn rescan(&mut self) {
         self.close_chooser();
-        let extracting: HashSet<String> = self
-            .extracting
-            .keys()
-            .chain(self.checking.keys())
-            .cloned()
-            .collect();
+        let extracting: HashSet<String> = self.jobs.keys().cloned().collect();
         let scans = scan_all(self.libraries.roots());
         self.libraries.set_offline(
             scans
@@ -458,7 +450,7 @@ impl App {
     /// there are none, otherwise the user is asked first.
     fn extract_game(&mut self, dir: &std::path::Path) {
         let id = dir.to_string_lossy().into_owned();
-        if extraction_in_progress(&self.extracting, &self.checking, &id) {
+        if self.jobs.in_progress(&id) {
             return;
         }
         let Some(ctx) = self.repaint.clone() else {
@@ -467,14 +459,14 @@ impl App {
         let check = OverwriteCheck::start(dir.to_path_buf(), self.encoding, move || {
             ctx.request_repaint()
         });
-        self.checking.insert(id.clone(), check);
+        self.jobs.start_check(id.clone(), check);
         self.message = Some(format!("Checking {}...", file_name_of(&id)));
     }
 
     /// Starts extracting in the background; progress shows on the tile and details page.
     fn begin_extraction(&mut self, dir: &std::path::Path, existing: Existing) {
         let id = dir.to_string_lossy().into_owned();
-        if self.extracting.contains_key(&id) {
+        if self.jobs.is_extracting(&id) {
             return;
         }
         let Some(ctx) = self.repaint.clone() else {
@@ -483,30 +475,27 @@ impl App {
         let job = ExtractJob::start_with(dir.to_path_buf(), self.encoding, existing, move || {
             ctx.request_repaint()
         });
-        self.extracting.insert(id.clone(), job);
+        self.jobs.start_extraction(id.clone(), job);
         self.message = Some(format!("Extracting {}...", file_name_of(&id)));
     }
 
     /// Asks a running extraction (or the check before it) to stop; an extraction removes
     /// what it created once it has.
     fn cancel_extraction(&mut self, id: &str) {
-        if self.checking.remove(id).is_some() {
-            self.message = Some(format!("Cancelled extracting {}", file_name_of(id)));
-        } else if let Some(job) = self.extracting.get(id) {
-            job.cancel();
-            self.message = Some(format!("Cancelling {}...", file_name_of(id)));
+        match self.jobs.cancel(id) {
+            Cancelled::Check => {
+                self.message = Some(format!("Cancelled extracting {}", file_name_of(id)));
+            }
+            Cancelled::Extraction => {
+                self.message = Some(format!("Cancelling {}...", file_name_of(id)));
+            }
+            Cancelled::Nothing => {}
         }
     }
 
     /// Acts on finished overwrite checks: extract at once, or ask first.
     fn poll_checks(&mut self) {
-        let done: Vec<(String, Result<Vec<PathBuf>, String>)> = self
-            .checking
-            .iter()
-            .filter_map(|(id, check)| Some((id.clone(), check.poll()?)))
-            .collect();
-        for (id, result) in done {
-            self.checking.remove(&id);
+        for (id, result) in self.jobs.finished_checks() {
             let dir = PathBuf::from(&id);
             match result {
                 Ok(files) if files.is_empty() => self.begin_extraction(&dir, Existing::Overwrite),
@@ -541,18 +530,11 @@ impl App {
     /// Collects finished extractions. Runs from `logic`, so it works while minimized.
     fn poll_extractions(&mut self) {
         self.poll_checks();
-        let mut finished = Vec::new();
-        for (id, job) in &mut self.extracting {
-            match job.poll() {
-                JobStatus::Running(_) => {}
-                done => finished.push((id.clone(), job.progress(), done)),
-            }
-        }
+        let finished = self.jobs.finished_extractions();
         if finished.is_empty() {
             return;
         }
         for (id, progress, status) in finished {
-            self.extracting.remove(&id);
             self.message = Some(match status {
                 JobStatus::Finished(Ok(())) if progress.files_skipped > 0 => format!(
                     "Extracted {id}: {} new, {} skipped",
@@ -1001,14 +983,7 @@ impl App {
             self.close_details_page();
             // Stop extracting into a folder that is no longer listed anywhere.
             if !removed.still_listed {
-                let running: Vec<String> = self
-                    .extracting
-                    .keys()
-                    .chain(self.checking.keys())
-                    .filter(|k| std::path::Path::new(k).parent() == Some(gone.as_path()))
-                    .cloned()
-                    .collect();
-                for key in running {
+                for key in self.jobs.keys_in(&gone) {
                     self.cancel_extraction(&key);
                 }
             }
@@ -1160,13 +1135,7 @@ impl App {
                 };
                 let entry = &entries[i];
                 let dir = entry.game.dir.clone();
-                if self.launcher.is_running(&dir)
-                    || extraction_in_progress(
-                        &self.extracting,
-                        &self.checking,
-                        &entry.game.dir_key(),
-                    )
-                {
+                if self.launcher.is_running(&dir) || self.jobs.in_progress(&entry.game.dir_key()) {
                     return;
                 }
                 if matches!(entry.extract, Ok(Status::NotExtracted)) {
@@ -1185,7 +1154,7 @@ impl App {
                 if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view) {
                     let game = entries[i].game.clone();
                     // While a game is extracting, this button cancels that instead.
-                    if extraction_in_progress(&self.extracting, &self.checking, &game.dir_key()) {
+                    if self.jobs.in_progress(&game.dir_key()) {
                         self.cancel_extraction(&game.dir_key());
                     } else {
                         self.reload(game);
@@ -1357,7 +1326,7 @@ impl eframe::App for App {
             self.repaint = Some(ctx.clone());
         }
         self.poll_extractions();
-        if !self.extracting.is_empty() || !self.checking.is_empty() {
+        if self.jobs.any() {
             // Backstop in case a wake-up is missed.
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -1650,11 +1619,7 @@ impl eframe::App for App {
                     error: self.errors.get(id).map(String::as_str),
                     busy: self.busy.contains(id),
                     running: self.launcher.is_running(&entry.game.dir),
-                    extracting: progress_of(
-                        &self.extracting,
-                        &self.checking,
-                        &entry.game.dir_key(),
-                    ),
+                    extracting: self.jobs.progress(&entry.game.dir_key()),
                     dir: &entry.game.dir,
                     proton_pin: tuning_pin.as_deref(),
                 };
@@ -1732,11 +1697,7 @@ impl eframe::App for App {
                                             .map(String::as_str),
                                         busy: self.busy.contains(&entry.game.key()),
                                         running: self.launcher.is_running(&entry.game.dir),
-                                        extracting: progress_of(
-                                            &self.extracting,
-                                            &self.checking,
-                                            &entry.game.dir_key(),
-                                        ),
+                                        extracting: self.jobs.progress(&entry.game.dir_key()),
                                         focused: self.cursor.control().is_none()
                                             && self.cursor.game()
                                                 == Some(entry.game.key().as_str()),
@@ -2177,21 +2138,6 @@ fn picker_window(ctx: &egui::Context, list: &PickerList, selected: usize) -> Opt
 }
 
 /// The last component of a path kept as text, for messages.
-/// The progress to draw for a game folder: the extraction's, or an empty bar while the
-/// overwrite check runs.
-fn progress_of(
-    extracting: &HashMap<String, ExtractJob>,
-    checking: &HashMap<String, OverwriteCheck>,
-    id: &str,
-) -> Option<Progress> {
-    extracting.get(id).map(ExtractJob::progress).or_else(|| {
-        checking.contains_key(id).then_some(Progress {
-            bytes_total: 1,
-            ..Progress::default()
-        })
-    })
-}
-
 fn file_name_of(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
