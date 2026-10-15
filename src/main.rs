@@ -23,6 +23,7 @@ use dackel_launcher::pickers::{
     self, Choice, ENCODINGS, Picker, PickerList, SORTS, Selection, debounce_label, encoding_label,
     sort_label,
 };
+use dackel_launcher::popup::{OVERWRITE_CHOICES, OverwritePrompt, ProtonPrompt};
 use dackel_launcher::profile::{self, ExeState, Stats};
 use dackel_launcher::proton::{self, ProtonChoice};
 use dackel_launcher::reload::Reloads;
@@ -225,25 +226,6 @@ enum PromptOption {
     Another,
     Version(PathBuf),
 }
-
-struct ProtonPrompt {
-    dir: PathBuf,
-    pinned: String,
-    newest: Option<PathBuf>,
-    /// Showing the list of installed versions to pick from.
-    choosing: bool,
-}
-
-/// Files an extraction would replace, shown for the user to decide.
-struct OverwritePrompt {
-    dir: PathBuf,
-    /// Relative to the game folder.
-    files: Vec<PathBuf>,
-    search: String,
-}
-
-/// The answers on the overwrite prompt, in the order they are listed and selected.
-const OVERWRITE_CHOICES: [&str; 3] = ["Cancel", "Overwrite", "Skip existing"];
 
 struct App {
     /// The library beside the binary (or `--library`); always first in `libraries`.
