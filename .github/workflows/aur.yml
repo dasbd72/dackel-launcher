@@ -1,0 +1,40 @@
+name: AUR
+
+# Publishes the PKGBUILD to the AUR when a version tag is pushed.
+# Needs the repository secret AUR_SSH_PRIVATE_KEY: the private key whose public half is on
+# the AUR account that maintains dackel-launcher.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, without the leading v (a tag v<version> must exist)"
+        required: true
+
+jobs:
+  aur:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set the version
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          version="${VERSION#v}"
+          sed -i "s/^pkgver=.*/pkgver=$version/; s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+
+      # Fills in the source checksum for that version, builds the package in an Arch
+      # container as a test, writes .SRCINFO and pushes both files to the AUR.
+      - name: Publish to the AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        with:
+          pkgname: dackel-launcher
+          pkgbuild: PKGBUILD
+          updpkgsums: true
+          test: true
+          commit_username: dasbd72
+          commit_email: twbd723@gmail.com
+          commit_message: Update to ${{ inputs.version || github.ref_name }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
