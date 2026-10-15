@@ -11,6 +11,7 @@ pub mod launch;
 pub mod library;
 pub mod library_list;
 pub mod nav;
+pub mod pad;
 pub mod pickers;
 pub mod popup;
 pub mod profile;
