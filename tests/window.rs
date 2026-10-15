@@ -97,8 +97,13 @@ fn both_machine_defaults_are_selectable_presets() {
 
 #[test]
 fn the_scale_label_shows_the_system_scale_it_multiplies() {
-    assert_eq!(scale_label(0.5, 1.0), "UI x0.50 (system x1.00)");
-    assert_eq!(scale_label(1.25, 1.5), "UI x1.25 (system x1.50)");
+    assert_eq!(scale_label(0.5, Some(1.0)), "UI x0.50 (system x1.00)");
+    assert_eq!(scale_label(1.25, Some(1.5)), "UI x1.25 (system x1.50)");
+}
+
+#[test]
+fn the_scale_label_says_so_when_the_system_scale_is_unknown() {
+    assert_eq!(scale_label(0.5, None), "UI x0.50 (system ?)");
 }
 
 mod restore {

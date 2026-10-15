@@ -1408,7 +1408,7 @@ impl eframe::App for App {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
         let current_scale = self.window.scale();
-        let system_scale = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
+        let system_scale = ui.ctx().native_pixels_per_point();
         let mut blur_on = self.settings.blur_covers;
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {

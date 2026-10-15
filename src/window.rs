@@ -36,9 +36,13 @@ pub fn default_ui_scale(deck_like: bool) -> f32 {
 }
 
 /// The scale dropdown's text: the launcher's own scale and the system scale it multiplies, so
-/// a report of a too-large UI says which of the two is responsible.
-pub fn scale_label(scale: f32, system: f32) -> String {
-    format!("UI x{scale:.2} (system x{system:.2})")
+/// a report of a too-large UI says which of the two is responsible. `system` is `None` when
+/// the window system reported none, which must not read as a scale of 1.
+pub fn scale_label(scale: f32, system: Option<f32>) -> String {
+    match system {
+        Some(system) => format!("UI x{scale:.2} (system x{system:.2})"),
+        None => format!("UI x{scale:.2} (system ?)"),
+    }
 }
 
 /// A saved choice wins; otherwise the Deck starts fullscreen and the desktop windowed.
