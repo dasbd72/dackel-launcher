@@ -19,6 +19,9 @@ use dackel_launcher::nav::{
     self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Debounce, Input,
     Repeater,
 };
+use dackel_launcher::pickers::{
+    ENCODINGS, Picker, PickerList, SORTS, debounce_label, encoding_label, sort_label,
+};
 use dackel_launcher::profile::{self, ExeState, Stats};
 use dackel_launcher::proton::{self, ProtonChoice};
 use dackel_launcher::reload::Reloads;
@@ -212,26 +215,6 @@ enum View {
     Missing,
     Games(Vec<Entry>),
     Error(String),
-}
-
-/// A small list opened from a toolbar dropdown so the controller can choose from it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Picker {
-    Sort,
-    Encoding,
-    Scale,
-    Debounce,
-    Library,
-}
-
-const SORTS: [Sort; 3] = [Sort::LastPlayed, Sort::Title, Sort::DateAdded];
-const ENCODINGS: [Encoding; 3] = [Encoding::Auto, Encoding::Cp932, Encoding::Utf8];
-
-/// What a dropdown popup shows: its title, its entries, and which one is current.
-struct PickerList {
-    title: &'static str,
-    labels: Vec<String>,
-    current: usize,
 }
 
 /// A launch waiting for the user to decide what to do about a missing Proton version.
@@ -2037,14 +2020,6 @@ fn added_secs(dir: &Path) -> Option<u64> {
     time.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
 }
 
-fn sort_label(sort: Sort) -> &'static str {
-    match sort {
-        Sort::LastPlayed => "Last played",
-        Sort::Title => "Title",
-        Sort::DateAdded => "Date added",
-    }
-}
-
 fn needs_choice(entry: &Entry) -> bool {
     matches!(entry.state, Ok(ExeState::NeedsExeChoice { .. }))
 }
@@ -2224,14 +2199,6 @@ fn two_line_title(ui: &egui::Ui, title: &str) -> egui::text::LayoutJob {
     job
 }
 
-fn encoding_label(encoding: Encoding) -> &'static str {
-    match encoding {
-        Encoding::Auto => "Auto",
-        Encoding::Cp932 => "cp932",
-        Encoding::Utf8 => "UTF-8",
-    }
-}
-
 const KEYBOARD: &[(egui::Key, Input)] = &[
     (egui::Key::ArrowUp, Input::Up),
     (egui::Key::ArrowDown, Input::Down),
@@ -2261,13 +2228,6 @@ fn pad_input(button: Button) -> Option<Input> {
         Button::Select => Input::Select,
         _ => return None,
     })
-}
-
-fn debounce_label(ms: u64) -> String {
-    match ms {
-        0 => "Off".to_owned(),
-        ms => format!("{ms} ms"),
-    }
 }
 
 fn dir_input(dir: nav::Dir) -> Input {
