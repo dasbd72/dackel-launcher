@@ -82,3 +82,111 @@ impl Restore {
         RestoreStep::Request
     }
 }
+
+/// A window change decided during a frame, sent to the window when the frame ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowCommand {
+    Fullscreen(bool),
+    Minimize,
+}
+
+/// What the launcher knows about its own window: fullscreen, UI scale, and whether a game
+/// launch minimized it (so only then is it brought back when the game exits).
+#[derive(Debug)]
+pub struct WindowState {
+    fullscreen: bool,
+    scale: f32,
+    minimize_on_launch: bool,
+    commands: Vec<WindowCommand>,
+    zoom_request: Option<f32>,
+    minimized_by_us: bool,
+    restore: Restore,
+}
+
+impl WindowState {
+    pub fn new(fullscreen: bool, scale: f32, minimize_on_launch: bool) -> Self {
+        Self {
+            fullscreen,
+            scale,
+            minimize_on_launch,
+            commands: Vec::new(),
+            zoom_request: None,
+            minimized_by_us: false,
+            restore: Restore::default(),
+        }
+    }
+
+    pub fn fullscreen(&self) -> bool {
+        self.fullscreen
+    }
+
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
+
+    pub fn minimized_by_us(&self) -> bool {
+        self.minimized_by_us
+    }
+
+    /// Flips fullscreen, asks the window to follow, and returns the new value.
+    pub fn toggle_fullscreen(&mut self) -> bool {
+        self.fullscreen = !self.fullscreen;
+        self.commands
+            .push(WindowCommand::Fullscreen(self.fullscreen));
+        self.fullscreen
+    }
+
+    /// Remembers a UI scale and asks for the window to be zoomed to it.
+    pub fn set_scale(&mut self, scale: f32) {
+        self.scale = scale;
+        self.zoom_request = Some(scale);
+    }
+
+    /// The zoom to apply this frame, once.
+    pub fn take_zoom_request(&mut self) -> Option<f32> {
+        self.zoom_request.take()
+    }
+
+    /// Whether the window's zoom has moved off the remembered scale (the user zoomed with
+    /// the keyboard), so the new value should be remembered.
+    pub fn zoom_differs(&self, zoom: f32) -> bool {
+        (zoom - self.scale).abs() > 1e-3
+    }
+
+    /// A game just started: hand the screen to it, if this machine does that.
+    pub fn game_started(&mut self) {
+        if self.minimize_on_launch {
+            self.commands.push(WindowCommand::Minimize);
+            self.minimized_by_us = true;
+        }
+    }
+
+    /// The window changes queued since the last call, in order.
+    pub fn drain_commands(&mut self) -> Vec<WindowCommand> {
+        std::mem::take(&mut self.commands)
+    }
+
+    /// Called every frame with whether a game was and is running. After the last game
+    /// exits it retries bringing the launcher back, but only if a launch minimized it.
+    /// `None` means nothing is waiting; otherwise the step to take now. `minimized` is
+    /// asked only when a step is due.
+    pub fn after_game_poll(
+        &mut self,
+        now_ms: u64,
+        was_running: bool,
+        running: bool,
+        minimized: impl FnOnce() -> bool,
+    ) -> Option<RestoreStep> {
+        if was_running && !running && self.minimized_by_us {
+            self.restore.arm(now_ms);
+        }
+        if !(self.minimized_by_us && !running) {
+            return None;
+        }
+        let step = self.restore.poll(now_ms, minimized());
+        if step == RestoreStep::Done {
+            self.minimized_by_us = false;
+        }
+        Some(step)
+    }
+}
