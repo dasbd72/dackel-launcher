@@ -195,7 +195,7 @@ fn entries_escaping_the_game_folder_are_refused_before_anything_is_written() {
 
 #[test]
 fn absolute_entries_and_metadata_folder_entries_are_refused() {
-    for name in ["/tmp/absolute.txt", ".dlsite-launcher/profile.json"] {
+    for name in ["/tmp/absolute.txt", ".dackel-launcher/profile.json"] {
         let lib = tempfile::tempdir().unwrap();
         let game = lib.path().join("RJ123456");
         fs::create_dir(&game).unwrap();
@@ -204,7 +204,7 @@ fn absolute_entries_and_metadata_folder_entries_are_refused() {
         let err = extract(&game, Encoding::Auto).unwrap_err();
 
         assert!(matches!(err, ExtractError::UnsafeEntry(_)), "{name}");
-        assert!(!game.join(".dlsite-launcher").exists(), "{name}");
+        assert!(!game.join(".dackel-launcher").exists(), "{name}");
     }
 }
 

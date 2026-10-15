@@ -16,7 +16,7 @@ fn favorite_is_persisted_in_the_profile() {
     set_favorite(game.path(), true).unwrap();
 
     assert!(read_stats(game.path()).unwrap().favorite);
-    let json = fs::read_to_string(game.path().join(".dlsite-launcher/profile.json")).unwrap();
+    let json = fs::read_to_string(game.path().join(".dackel-launcher/profile.json")).unwrap();
     assert!(json.contains("\"favorite\": true"), "profile was {json}");
 }
 
@@ -49,9 +49,9 @@ fn unfavoriting_clears_the_flag() {
 fn profiles_written_before_favorites_existed_read_as_not_favorite() {
     let game = tempfile::tempdir().unwrap();
     file(game.path(), "Game.exe", 1000);
-    fs::create_dir_all(game.path().join(".dlsite-launcher")).unwrap();
+    fs::create_dir_all(game.path().join(".dackel-launcher")).unwrap();
     fs::write(
-        game.path().join(".dlsite-launcher/profile.json"),
+        game.path().join(".dackel-launcher/profile.json"),
         r#"{ "exe": "Game.exe" }"#,
     )
     .unwrap();
@@ -77,9 +77,9 @@ fn a_game_without_profile_has_default_stats() {
 #[test]
 fn play_time_and_last_played_are_read_from_the_profile() {
     let game = tempfile::tempdir().unwrap();
-    fs::create_dir_all(game.path().join(".dlsite-launcher")).unwrap();
+    fs::create_dir_all(game.path().join(".dackel-launcher")).unwrap();
     fs::write(
-        game.path().join(".dlsite-launcher/profile.json"),
+        game.path().join(".dackel-launcher/profile.json"),
         r#"{ "exe": "Game.exe", "play_time_secs": 3725, "last_played": 1700000000 }"#,
     )
     .unwrap();

@@ -1,4 +1,4 @@
-use dackel_launcher::library::scan;
+use dackel_launcher::library::{is_dlsite_id, scan};
 use std::fs;
 
 fn ids(library: &std::path::Path) -> Vec<String> {
@@ -6,24 +6,41 @@ fn ids(library: &std::path::Path) -> Vec<String> {
 }
 
 #[test]
-fn lists_only_rj_directories_sorted_by_id() {
+fn lists_every_game_folder_sorted_by_id_but_not_hidden_folders_or_files() {
     let lib = tempfile::tempdir().unwrap();
     for name in [
         "RJ01389782",
         "RJ297317",
-        "wine",
-        "temp_RJ01612428",
-        "RJ",
-        "RJ12ab",
-        "rj123",
-        "RJ99.zip.d",
+        "Some Other Game",
+        ".hidden",
+        ".dackel-launcher",
     ] {
         fs::create_dir(lib.path().join(name)).unwrap();
     }
     fs::write(lib.path().join("RJ555555"), "a file, not a game").unwrap();
     fs::write(lib.path().join("common.sh"), "").unwrap();
 
-    assert_eq!(ids(lib.path()), ["RJ01389782", "RJ297317"]);
+    assert_eq!(
+        ids(lib.path()),
+        ["RJ01389782", "RJ297317", "Some Other Game"]
+    );
+}
+
+#[test]
+fn only_rj_followed_by_digits_is_a_dlsite_id() {
+    for id in ["RJ01389782", "RJ1"] {
+        assert!(is_dlsite_id(id), "{id}");
+    }
+    for id in [
+        "RJ",
+        "RJ12ab",
+        "rj123",
+        "temp_RJ01612428",
+        "RJ99.zip.d",
+        "Game",
+    ] {
+        assert!(!is_dlsite_id(id), "{id}");
+    }
 }
 
 #[test]
@@ -50,7 +67,7 @@ fn rescan_picks_up_folders_added_later() {
 #[test]
 fn metadata_folder_contents_are_never_listed_as_games() {
     let lib = tempfile::tempdir().unwrap();
-    let meta = lib.path().join("RJ123456").join(".dlsite-launcher");
+    let meta = lib.path().join("RJ123456").join(".dackel-launcher");
     fs::create_dir_all(meta.join("wine").join("RJ999999")).unwrap();
 
     assert_eq!(ids(lib.path()), ["RJ123456"]);

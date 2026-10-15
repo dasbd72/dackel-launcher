@@ -1,12 +1,11 @@
 use crate::fetch::{Fetch, Fetched};
-use crate::library::Game;
+use crate::library::{Game, META_DIR, is_dlsite_id};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-const META_DIR: &str = ".dlsite-launcher";
 const INFO_FILE: &str = "info.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,13 +20,18 @@ pub struct GameInfo {
 }
 
 pub fn refresh(game: &Game, fetch: &dyn Fetch) -> io::Result<GameInfo> {
-    let url = format!(
-        "https://www.dlsite.com/maniax-touch/work/=/product_id/{}.html",
-        game.id
-    );
-    let parsed = match fetch.get(&url)? {
-        Fetched::Body(body) => parse_page(&game.id, &String::from_utf8_lossy(&body)),
-        Fetched::NotFound => None,
+    // Only DLsite works have a store page; any other game is shown by its folder name.
+    let parsed = if is_dlsite_id(&game.id) {
+        let url = format!(
+            "https://www.dlsite.com/maniax-touch/work/=/product_id/{}.html",
+            game.id
+        );
+        match fetch.get(&url)? {
+            Fetched::Body(body) => parse_page(&game.id, &String::from_utf8_lossy(&body)),
+            Fetched::NotFound => None,
+        }
+    } else {
+        None
     };
     let (mut info, cover_url) = match parsed {
         Some(parsed) => parsed,

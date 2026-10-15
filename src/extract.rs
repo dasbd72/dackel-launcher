@@ -1,10 +1,10 @@
+use crate::library::META_DIR;
 use std::borrow::Cow;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const META_DIR: &str = ".dlsite-launcher";
 const UTF8_FLAG: u16 = 0x0800;
 /// How much is copied between progress reports.
 const COPY_CHUNK: usize = 64 * 1024;

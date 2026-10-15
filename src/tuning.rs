@@ -2,11 +2,11 @@
 //!
 //! Everything here is pure text handling or touches only one game's own metadata folder.
 
+use crate::library::META_DIR;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-const META_DIR: &str = ".dlsite-launcher";
 const PREFIX_DIR: &str = "wine";
 
 /// Parses `KEY=value` lines. Blank lines and `#` comments are ignored; the error names the

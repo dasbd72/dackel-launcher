@@ -1,7 +1,7 @@
+use crate::library::META_DIR;
 use std::io;
 use std::path::{Path, PathBuf};
 
-const META_DIR: &str = ".dlsite-launcher";
 const MAX_DEPTH: usize = 3;
 
 const HELPER_PREFIXES: [&str; 5] = [

@@ -13,14 +13,24 @@ The script prints the highest glibc version the binary asks for; it should be 2.
 Copy the binary next to the library folder on the drive:
 
 ```
-DLSite/
+Games/
   dackel-launcher
-  DLSiteLibrary/RJ.../
   umu-run
+  DLSiteLibrary/RJ.../
 ```
 
-It looks for `DLSiteLibrary/` beside itself, so the drive can be mounted anywhere.
+It picks up a `DLSiteLibrary/` folder beside itself, so the drive can be mounted anywhere.
+Any other folder of games is added in the **Libraries** window.
 `--library /some/path` uses another folder for one run.
+
+## Upgrading from dlsite-launcher
+
+Each game keeps its data in a hidden `.dackel-launcher/` folder (it was `.dlsite-launcher/`);
+the old name is no longer read. Rename it in every game folder once:
+
+```
+for d in /path/to/library/*/.dlsite-launcher; do mv "$d" "${d%/*}/.dackel-launcher"; done
+```
 
 ## What the Deck needs
 
@@ -62,7 +72,7 @@ Tick each on the **desktop** and on the **Deck**.
 | Check | Desktop | Deck |
 | --- | --- | --- |
 | The same `dist/dackel-launcher` file starts (no `GLIBC_...` or missing-library error) | [ ] | [ ] |
-| Games from `DLSiteLibrary/` appear, covers and Japanese titles render | [ ] | [ ] |
+| Games from the library appear, covers and Japanese titles render | [ ] | [ ] |
 | Starts fullscreen on the Deck / windowed on the desktop (Fullscreen button and F11 toggle it) | [ ] | [ ] |
 | D-pad moves focus over the toolbar, tiles and details buttons; A presses; B backs out | [ ] | [ ] |
 | Left stick scrolls the details page; the page follows focus | [ ] | [ ] |
@@ -72,7 +82,7 @@ Tick each on the **desktop** and on the **Deck**.
 | Re-extract over existing files: the popup lists them, search filters, Cancel / Overwrite / Skip existing work | [ ] | [ ] |
 | **A real game launches from the gamepad and plays**; play time is saved on exit | [ ] | [ ] |
 | Launcher comes back after the game exits (window restore) | [ ] | [ ] |
-| Mount the drive somewhere else (or copy the folder elsewhere): it still finds `DLSiteLibrary/` | [ ] | [ ] |
+| Mount the drive somewhere else (or copy the folder elsewhere): it still finds the `DLSiteLibrary/` beside it | [ ] | [ ] |
 | The first launch pins the Proton version (details page > Launch options) | [ ] | [ ] |
 | A game pinned on one machine shows the "Proton version missing" prompt on the other if its version is not installed | [ ] | [ ] |
 | Libraries window: add a second folder; its games show with the library filter | [ ] | [ ] |

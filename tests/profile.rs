@@ -9,7 +9,7 @@ fn file(root: &Path, rel: &str, bytes: usize) {
 }
 
 fn profile_path(game: &Path) -> PathBuf {
-    game.join(".dlsite-launcher").join("profile.json")
+    game.join(".dackel-launcher").join("profile.json")
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn exes_are_searched_three_levels_deep_and_never_inside_the_metadata_folder() {
     file(game.path(), "A/B/C/D/TooDeep.exe", 100_000_000);
     file(
         game.path(),
-        ".dlsite-launcher/wine/drive_c/Prefix.exe",
+        ".dackel-launcher/wine/drive_c/Prefix.exe",
         100_000_000,
     );
 
@@ -224,7 +224,7 @@ fn only_the_metadata_folder_is_ever_written() {
 
     let after: Vec<_> = snapshot(game.path())
         .into_iter()
-        .filter(|(rel, _)| !rel.starts_with(".dlsite-launcher"))
+        .filter(|(rel, _)| !rel.starts_with(".dackel-launcher"))
         .collect();
     assert_eq!(after, before);
 }

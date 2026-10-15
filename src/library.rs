@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 
 const LIBRARY_DIR: &str = "DLSiteLibrary";
 
+/// The hidden folder inside each game folder that holds everything the launcher keeps for
+/// that game: profile, info, cover, logs and the Wine prefix.
+pub const META_DIR: &str = ".dackel-launcher";
+
 pub fn resolve_library(exe_path: &Path, override_dir: Option<&Path>) -> io::Result<PathBuf> {
     if let Some(dir) = override_dir {
         return Ok(dir.to_path_buf());
@@ -162,7 +166,7 @@ pub fn scan(library_dir: &Path) -> io::Result<Vec<Game>> {
         let Some(id) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if is_game_id(id) && path.is_dir() {
+        if !id.starts_with('.') && path.is_dir() {
             games.push(Game {
                 id: id.to_owned(),
                 dir: path,
@@ -174,7 +178,8 @@ pub fn scan(library_dir: &Path) -> io::Result<Vec<Game>> {
     Ok(games)
 }
 
-fn is_game_id(name: &str) -> bool {
+/// True for ids the DLsite store knows: `RJ` followed by digits.
+pub fn is_dlsite_id(name: &str) -> bool {
     name.strip_prefix("RJ")
         .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
 }

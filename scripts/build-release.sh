@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds dist/dackel-launcher inside a Debian 12 container, so the binary needs only an old
-# glibc and runs on both the Arch desktop and the Steam Deck. Copy it (and dist/umu-run) next to DLSiteLibrary/.
+# glibc and runs on both the Arch desktop and the Steam Deck. Copy it (and dist/umu-run) next to the library folder.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

@@ -1,3 +1,4 @@
+use crate::library::META_DIR;
 use crate::profile::{self, ExeState, Tuning};
 use crate::tuning::{prefix_dir, split_args};
 use std::collections::BTreeMap;
@@ -5,8 +6,6 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-const META_DIR: &str = ".dlsite-launcher";
 
 /// Everything needed to start a game, computed without touching the system.
 #[derive(Debug, Clone, PartialEq, Eq)]

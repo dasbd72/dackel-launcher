@@ -1,10 +1,10 @@
 use crate::exe::{find_candidates, legacy_hint, pick};
+use crate::library::META_DIR;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-const META_DIR: &str = ".dlsite-launcher";
 const PROFILE_FILE: &str = "profile.json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

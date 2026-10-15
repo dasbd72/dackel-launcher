@@ -327,10 +327,10 @@ pub fn details_ui(
             ui.separator();
             match view.info {
                 None => {
-                    ui.label("No info yet. Press Reload info to fetch it from DLsite.");
+                    ui.label("No info yet. Press Reload info to fetch it.");
                 }
                 Some(info) => {
-                    if !info.found {
+                    if !info.found && dackel_launcher::library::is_dlsite_id(&info.id) {
                         ui.weak("No DLsite page was found for this work; showing the folder name.");
                     }
                     // A box as wide as the window; the text wraps to it.

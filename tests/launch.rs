@@ -16,7 +16,7 @@ fn plan_runs_umu_on_the_exe_from_its_own_folder_with_the_game_prefix() {
     assert_eq!(p.working_dir, PathBuf::from("/library/RJ123456/bin"));
     assert_eq!(
         p.env.get("WINEPREFIX").map(String::as_str),
-        Some("/library/RJ123456/.dlsite-launcher/wine")
+        Some("/library/RJ123456/.dackel-launcher/wine")
     );
     assert_eq!(p.env.get("LANG").map(String::as_str), Some("ja_JP.UTF-8"));
     assert_eq!(p.env.get("LC_ALL").map(String::as_str), Some("ja_JP.UTF-8"));
@@ -131,7 +131,7 @@ fn starting_a_ready_game_spawns_umu_and_marks_it_running() {
     assert_eq!(spawned[0].program, "umu-run");
     assert_eq!(
         spawned[0].log_path,
-        game.path().join(".dlsite-launcher").join("last-run.log")
+        game.path().join(".dackel-launcher").join("last-run.log")
     );
     assert!(launcher.is_running(game.path()));
 }
@@ -226,8 +226,8 @@ fn the_real_spawner_runs_the_plan_in_its_folder_with_env_and_log() {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    let log = fs::read_to_string(game.path().join(".dlsite-launcher/last-run.log")).unwrap();
+    let log = fs::read_to_string(game.path().join(".dackel-launcher/last-run.log")).unwrap();
     assert!(log.contains("bin"), "log was {log}");
-    assert!(log.contains(".dlsite-launcher/wine"), "log was {log}");
+    assert!(log.contains(".dackel-launcher/wine"), "log was {log}");
     assert!(log.contains("oops"), "stderr missing from {log}");
 }

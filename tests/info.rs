@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 
 fn read_info(game: &Game) -> serde_json::Value {
-    let path = game.dir.join(".dlsite-launcher").join("info.json");
+    let path = game.dir.join(".dackel-launcher").join("info.json");
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
 
@@ -44,7 +44,7 @@ fn cover_is_saved_beside_info_json_and_named_in_it() {
 
     refresh(&game, &site).unwrap();
 
-    let meta = game.dir.join(".dlsite-launcher");
+    let meta = game.dir.join(".dackel-launcher");
     assert_eq!(read_info(&game)["cover"], "cover.jpg");
     assert_eq!(fs::read(meta.join("cover.jpg")).unwrap(), cover);
 }
@@ -60,7 +60,7 @@ fn missing_page_falls_back_to_folder_name_without_cover() {
     assert_eq!(info["title"], "RJ999999");
     assert_eq!(info["found"], false);
     assert_eq!(info["cover"], serde_json::Value::Null);
-    let meta = game.dir.join(".dlsite-launcher");
+    let meta = game.dir.join(".dackel-launcher");
     assert_eq!(fs::read_dir(meta).unwrap().count(), 1, "only info.json");
 }
 
@@ -86,7 +86,7 @@ fn other_category_page_without_a_work_title_falls_back() {
 fn reload_never_touches_the_profile() {
     let lib = tempfile::tempdir().unwrap();
     let game = game_in(lib.path(), "RJ123456");
-    let meta = game.dir.join(".dlsite-launcher");
+    let meta = game.dir.join(".dackel-launcher");
     fs::create_dir_all(&meta).unwrap();
     let profile = br#"{"exe":"game/start.exe","favorite":true}"#;
     fs::write(meta.join("profile.json"), profile).unwrap();
@@ -108,7 +108,7 @@ fn reload_removes_a_cover_the_page_no_longer_has() {
         .with(PAGE_URL, &fixture("maniax_touch_work.html"))
         .with(COVER_URL, b"cover");
     refresh(&game, &site).unwrap();
-    let meta = game.dir.join(".dlsite-launcher");
+    let meta = game.dir.join(".dackel-launcher");
     assert!(meta.join("cover.jpg").exists());
 
     let page_only = Site::default().with(PAGE_URL, &fixture("maniax_touch_work.html"));
@@ -156,6 +156,18 @@ fn load_returns_what_refresh_saved() {
     assert_eq!(load(&game), Some(saved));
     assert_eq!(
         cover_path(&game, &load(&game).unwrap()),
-        Some(game.dir.join(".dlsite-launcher").join("cover.jpg"))
+        Some(game.dir.join(".dackel-launcher").join("cover.jpg"))
     );
+}
+
+#[test]
+fn a_game_that_is_not_from_dlsite_is_never_looked_up_online() {
+    let lib = tempfile::tempdir().unwrap();
+    let game = game_in(lib.path(), "Some Other Game");
+
+    let info = refresh(&game, &Offline).unwrap();
+
+    assert_eq!(info.title, "Some Other Game");
+    assert!(!info.found);
+    assert_eq!(read_info(&game)["found"], false);
 }

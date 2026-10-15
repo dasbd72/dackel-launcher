@@ -167,7 +167,7 @@ mod launch_plan {
         assert_eq!(p.env.get("LANG").map(String::as_str), Some("en_US.UTF-8"));
         assert_eq!(
             p.env.get("WINEPREFIX").map(String::as_str),
-            Some("/lib/RJ1/.dlsite-launcher/wine")
+            Some("/lib/RJ1/.dackel-launcher/wine")
         );
     }
 
@@ -421,7 +421,7 @@ mod prefix {
     fn the_prefix_lives_in_the_games_own_metadata() {
         assert_eq!(
             prefix_dir(Path::new("/lib/RJ1")),
-            PathBuf::from("/lib/RJ1/.dlsite-launcher/wine")
+            PathBuf::from("/lib/RJ1/.dackel-launcher/wine")
         );
     }
 
@@ -435,13 +435,13 @@ mod prefix {
             fs::write(game.join("Game.exe"), b"").unwrap();
         }
         set_tuning(&a, env(&[("A", "1")]), "-x").unwrap();
-        fs::write(a.join(".dlsite-launcher/last-run.log"), b"log").unwrap();
+        fs::write(a.join(".dackel-launcher/last-run.log"), b"log").unwrap();
 
         reset_prefix(&a).unwrap();
 
         assert!(!prefix_dir(&a).exists());
         assert!(a.join("Game.exe").exists(), "game files are untouched");
-        assert!(a.join(".dlsite-launcher/last-run.log").exists());
+        assert!(a.join(".dackel-launcher/last-run.log").exists());
         assert_eq!(read_tuning(&a).unwrap().args, "-x", "tuning is kept");
         assert!(
             prefix_dir(&b).join("drive_c").exists(),
@@ -464,7 +464,7 @@ mod winetricks {
     fn the_command_points_winetricks_at_the_games_prefix() {
         assert_eq!(
             winetricks_command(Path::new("/lib/RJ1")),
-            "WINEPREFIX='/lib/RJ1/.dlsite-launcher/wine' winetricks"
+            "WINEPREFIX='/lib/RJ1/.dackel-launcher/wine' winetricks"
         );
     }
 
@@ -472,7 +472,7 @@ mod winetricks {
     fn paths_with_spaces_and_quotes_are_shell_safe() {
         assert_eq!(
             winetricks_command(Path::new("/my lib/it's/RJ1")),
-            r#"WINEPREFIX='/my lib/it'\''s/RJ1/.dlsite-launcher/wine' winetricks"#
+            r#"WINEPREFIX='/my lib/it'\''s/RJ1/.dackel-launcher/wine' winetricks"#
         );
     }
 }

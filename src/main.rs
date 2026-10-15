@@ -1056,7 +1056,7 @@ impl App {
                     let edit = ui.add(
                         egui::TextEdit::singleline(&mut self.library_input)
                             .desired_width(420.0)
-                            .hint_text("/path/to/DLSiteLibrary"),
+                            .hint_text("/path/to/games"),
                     );
                     let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if ui.button("Add").clicked() || enter {
