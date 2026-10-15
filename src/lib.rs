@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod blur;
 pub mod browse;
 pub mod cursor;
