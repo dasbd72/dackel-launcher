@@ -4,6 +4,7 @@ mod focus;
 mod icons;
 
 use covers::{BlurCache, CoverView};
+use dackel_launcher::actions::Actions;
 use dackel_launcher::browse::{self, Card, Query, Sort};
 use dackel_launcher::cursor::{Cursor, Page, Slot, Target};
 use dackel_launcher::extract::{self, Encoding, Existing, Progress, Status};
@@ -674,6 +675,22 @@ impl App {
             .collect()
     }
 
+    /// Carries out what the toolbar asked for, before the rest of the frame is drawn.
+    fn apply_toolbar(&mut self, actions: &Actions) {
+        if actions.fullscreen {
+            self.toggle_fullscreen();
+        }
+        if actions.toggle_blur {
+            self.toggle_blur();
+        }
+        if let Some(ms) = actions.debounce {
+            self.set_debounce(ms);
+        }
+        if let Some(scale) = actions.scale {
+            self.set_ui_scale(scale);
+        }
+    }
+
     /// The name to show beside a game's library; `None` with a single library.
     fn library_label(&self, game: &Game) -> Option<String> {
         self.libraries.label_of(game.slot)
@@ -1326,7 +1343,7 @@ impl eframe::App for App {
             self.set_ui_scale(ctx.zoom_factor());
         }
 
-        let mut rescan = false;
+        let mut actions = Actions::default();
         let mut extract_dir: Option<PathBuf> = None;
         let mut create = false;
         let mut open_libraries = false;
@@ -1358,22 +1375,19 @@ impl eframe::App for App {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
         let current_scale = self.window.scale();
-        let mut picked_scale: Option<f32> = None;
-        let mut picked_debounce: Option<u64> = None;
-        let mut fullscreen_click = false;
         let mut blur_on = self.settings.blur_covers;
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let response = ui.button("Rescan");
                 if frame.pressed(ui, Control::Rescan, &response, true) {
-                    rescan = true;
+                    actions.rescan = true;
                 }
                 let response = ui.button("Libraries");
                 if frame.pressed(ui, Control::Libraries, &response, true) {
                     self.popup = Some(Popup::Libraries);
                 }
                 let response = ui.button("Fullscreen");
-                fullscreen_click = frame.pressed(ui, Control::Fullscreen, &response, true);
+                actions.fullscreen = frame.pressed(ui, Control::Fullscreen, &response, true);
                 let response = ui
                     .toggle_value(&mut blur_on, "Blur")
                     .on_hover_text("Blur all images (key: B)");
@@ -1387,7 +1401,7 @@ impl eframe::App for App {
                         for preset in window::SCALE_PRESETS {
                             let on = (current_scale - preset).abs() < 1e-3;
                             if ui.selectable_label(on, format!("{preset:.2}")).clicked() {
-                                picked_scale = Some(preset);
+                                actions.scale = Some(preset);
                             }
                         }
                     })
@@ -1402,7 +1416,7 @@ impl eframe::App for App {
                         for ms in DEBOUNCE_PRESETS_MS {
                             let on = ms == self.pad.debounce_window();
                             if ui.selectable_label(on, debounce_label(ms)).clicked() {
-                                picked_debounce = Some(ms);
+                                actions.debounce = Some(ms);
                             }
                         }
                     })
@@ -1481,18 +1495,8 @@ impl eframe::App for App {
             }
         });
 
-        if fullscreen_click {
-            self.toggle_fullscreen();
-        }
-        if blur_on != self.settings.blur_covers {
-            self.toggle_blur();
-        }
-        if let Some(ms) = picked_debounce {
-            self.set_debounce(ms);
-        }
-        if let Some(scale) = picked_scale {
-            self.set_ui_scale(scale);
-        }
+        actions.toggle_blur = blur_on != self.settings.blur_covers;
+        self.apply_toolbar(&actions);
 
         let hint = match self.context() {
             Context::Grid => {
@@ -1777,7 +1781,7 @@ impl eframe::App for App {
             self.popup = Some(Popup::Libraries);
         } else if create {
             self.create_library();
-        } else if rescan {
+        } else if actions.rescan {
             self.rescan();
         }
         for command in self.window.drain_commands() {
