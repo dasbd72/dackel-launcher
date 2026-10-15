@@ -244,7 +244,6 @@ struct App {
     details_scroll: f32,
     /// What the left stick asks the details page to do this frame (-1.0 down .. 1.0 up).
     pad_scroll: f32,
-    overwrite_prompt: Option<OverwritePrompt>,
     /// Looking for files an extraction would overwrite, by game folder.
     checking: HashMap<String, OverwriteCheck>,
     /// The details page's Launch options form.
@@ -318,7 +317,6 @@ impl App {
             popup: None,
             details_scroll: 0.0,
             pad_scroll: 0.0,
-            overwrite_prompt: None,
             checking: HashMap::new(),
             tuning_edit: None,
             library_input: String::new(),
@@ -552,11 +550,11 @@ impl App {
             match result {
                 Ok(files) if files.is_empty() => self.begin_extraction(&dir, Existing::Overwrite),
                 Ok(files) => {
-                    self.overwrite_prompt = Some(OverwritePrompt {
+                    self.popup = Some(Popup::Overwrite(OverwritePrompt {
                         dir,
                         files,
                         search: String::new(),
-                    });
+                    }));
                     // Cancel is the first choice, so a stray A press overwrites nothing.
                     self.list_sel = 0;
                     self.message = None;
@@ -569,7 +567,7 @@ impl App {
     }
 
     fn answer_overwrite(&mut self, choice: usize) {
-        let Some(prompt) = self.overwrite_prompt.take() else {
+        let Some(prompt) = self.take_overwrite_prompt() else {
             return;
         };
         match choice {
@@ -810,7 +808,7 @@ impl App {
     }
 
     fn context(&self) -> Context {
-        if self.popup.is_some() || self.overwrite_prompt.is_some() {
+        if self.popup.is_some() {
             Context::Chooser
         } else if matches!(self.screen, Screen::Details(_)) {
             Context::Details
@@ -929,7 +927,7 @@ impl App {
 
     /// Lists the files an extraction would overwrite and asks what to do about them.
     fn overwrite_prompt_window(&mut self, ctx: &egui::Context) {
-        let Some(prompt) = &mut self.overwrite_prompt else {
+        let Some(prompt) = self.popup.as_mut().and_then(Popup::as_overwrite_mut) else {
             return;
         };
         let needle = prompt.search.to_lowercase();
@@ -1137,6 +1135,21 @@ impl App {
         }
     }
 
+    fn overwrite_prompt_open(&self) -> bool {
+        self.popup.as_ref().and_then(Popup::as_overwrite).is_some()
+    }
+
+    /// Takes the overwrite prompt, closing it. Any other popup is left open.
+    fn take_overwrite_prompt(&mut self) -> Option<OverwritePrompt> {
+        match self.popup.take() {
+            Some(Popup::Overwrite(prompt)) => Some(prompt),
+            other => {
+                self.popup = other;
+                None
+            }
+        }
+    }
+
     fn proton_prompt_open(&self) -> bool {
         self.popup.as_ref().and_then(Popup::as_proton).is_some()
     }
@@ -1276,7 +1289,7 @@ impl App {
             }
             Command::ChooserMove(delta) => {
                 let len = match self.picker_open() {
-                    _ if self.overwrite_prompt.is_some() => OVERWRITE_CHOICES.len(),
+                    _ if self.overwrite_prompt_open() => OVERWRITE_CHOICES.len(),
                     _ if self.proton_prompt_open() => self.prompt_options().len(),
                     Some(picker) => self.picker_list(picker).labels.len(),
                     None => match &self.view {
@@ -1291,7 +1304,7 @@ impl App {
                 self.list_sel = (self.list_sel as i64 + i64::from(delta)).clamp(0, last) as usize;
             }
             Command::ChooserPick => {
-                if self.overwrite_prompt.is_some() {
+                if self.overwrite_prompt_open() {
                     self.answer_overwrite(self.list_sel);
                     return;
                 }
@@ -1325,7 +1338,6 @@ impl App {
             }
             Command::ChooserCancel => {
                 self.popup = None;
-                self.overwrite_prompt = None;
             }
             Command::ToggleFullscreen => self.toggle_fullscreen(),
             Command::ToggleBlur => self.toggle_blur(),
@@ -1380,7 +1392,7 @@ impl App {
                 .find(|&(x, y)| nav::stick_dir(x, y).is_some())
                 .unwrap_or((0.0, 0.0));
             // On the details page, pushing the stick up or down scrolls instead of moving focus.
-            let scroll = if (on_details || self.overwrite_prompt.is_some()) && focused {
+            let scroll = if (on_details || self.overwrite_prompt_open()) && focused {
                 nav::stick_scroll(stick.0, stick.1)
             } else {
                 0.0
@@ -1900,7 +1912,7 @@ impl eframe::App for App {
         if self.proton_prompt_open() {
             self.proton_prompt_window(ui.ctx());
         }
-        if self.overwrite_prompt.is_some() {
+        if self.overwrite_prompt_open() {
             self.overwrite_prompt_window(ui.ctx());
         }
         if let Some(result) = tuning_action {
