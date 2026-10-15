@@ -14,4 +14,5 @@ pub mod proton;
 pub mod reload;
 pub mod settings;
 pub mod tuning;
+pub mod umu;
 pub mod window;

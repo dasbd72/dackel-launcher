@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds dist/dlsite-launcher inside a Debian 12 container, so the binary needs only an old
-# glibc and runs on both the Arch desktop and the Steam Deck. Copy it next to DLSiteLibrary/.
+# glibc and runs on both the Arch desktop and the Steam Deck. Copy it (and dist/umu-run) next to DLSiteLibrary/.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -19,6 +19,7 @@ docker run --rm \
     cargo build --release --locked
 
 cp target-docker/release/dlsite-launcher dist/dlsite-launcher
+scripts/fetch-umu.sh
 
 # Highest glibc version the binary asks for: must stay at or below what the Deck has.
 need=$(objdump -T dist/dlsite-launcher | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)

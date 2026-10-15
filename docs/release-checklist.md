@@ -16,6 +16,7 @@ Copy the binary next to the library folder on the drive:
 DLSite/
   dlsite-launcher
   DLSiteLibrary/RJ.../
+  umu-run
 ```
 
 It looks for `DLSiteLibrary/` beside itself, so the drive can be mounted anywhere.
@@ -23,7 +24,11 @@ It looks for `DLSiteLibrary/` beside itself, so the drive can be mounted anywher
 
 ## What the Deck needs
 
-- `umu-run` on the `PATH` (umu-launcher), and a GE-Proton under
+- `umu-run`: SteamOS is read-only, so copy `dist/umu-run` (from `scripts/fetch-umu.sh`)
+  beside `dlsite-launcher`. The launcher looks at `$UMU_RUN`, beside itself, the `PATH`,
+  then `~/.local/bin`. It needs `python3` (the Deck has it) and the internet on the first
+  run, when umu downloads the Steam Linux Runtime.
+- A GE-Proton under
   `~/.local/share/Steam/compatibilitytools.d/` (or `~/.config/dlsite-launcher/proton-path`
   / `$PROTONPATH` pointing at one).
 - A font with Japanese glyphs (SteamOS ships one).

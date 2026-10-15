@@ -124,9 +124,16 @@ impl Spawner for UmuSpawner {
         if let Some(dir) = plan.log_path.parent() {
             std::fs::create_dir_all(dir)?;
         }
+        let program = if plan.program == "umu-run" {
+            crate::umu::locate_default().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, crate::umu::missing_message())
+            })?
+        } else {
+            PathBuf::from(&plan.program)
+        };
         let log = std::fs::File::create(&plan.log_path)?;
         let log_err = log.try_clone()?;
-        let child = Command::new(&plan.program)
+        let child = Command::new(&program)
             .args(&plan.args)
             .envs(&plan.env)
             .current_dir(&plan.working_dir)
