@@ -16,7 +16,7 @@
     <p>
       Everything works with a gamepad, a mouse or a keyboard. Each game keeps its own
       settings, Wine prefix and Proton version, and shows its store information for
-      DLsite games.
+      DLsite or 072Project games.
     </p>
   </description>
   <launchable type="desktop-id">io.github.dasbd72.DackelLauncher.desktop</launchable>
