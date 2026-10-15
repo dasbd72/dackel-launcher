@@ -1344,18 +1344,10 @@ impl eframe::App for App {
         }
 
         let mut actions = Actions::default();
-        let mut extract_dir: Option<PathBuf> = None;
-        let mut create = false;
-        let mut open_libraries = false;
         let mut choice = None;
         let mut close_chooser = false;
         let mut picker_pick: Option<(Picker, usize)> = None;
         let mut picker_cancel = false;
-        let mut launch = None;
-        let mut clicked_focus: Option<String> = None;
-        let mut cancel_ids: Vec<String> = Vec::new();
-        let mut open_details: Option<String> = None;
-        let mut favorite_id: Option<String> = None;
         let mut back = false;
         let mut details_reload: Option<Game> = None;
         let mut details_extract: Option<PathBuf> = None;
@@ -1521,7 +1513,7 @@ impl eframe::App for App {
                     ));
                     let response = ui.button("Create it");
                     if frame.pressed(ui, Control::CreateLibrary, &response, true) {
-                        create = true;
+                        actions.create_library = true;
                     }
                 } else {
                     ui.heading("No library yet");
@@ -1529,7 +1521,7 @@ impl eframe::App for App {
                 }
                 let response = ui.button("Add a library folder");
                 if frame.pressed(ui, Control::AddLibrary, &response, true) {
-                    open_libraries = true;
+                    actions.open_libraries = true;
                 }
             }
             (_, View::Error(msg)) => {
@@ -1592,13 +1584,13 @@ impl eframe::App for App {
                     details_extract = Some(entry.game.dir.clone());
                 }
                 if action.cancel_extract {
-                    cancel_ids.push(entry.game.dir_key());
+                    actions.cancel_extract.push(entry.game.dir_key());
                 }
                 if action.launch {
-                    launch = entries.iter().position(|e| &e.game.key() == id);
+                    actions.launch = entries.iter().position(|e| &e.game.key() == id);
                 }
                 if action.toggle_favorite {
-                    favorite_id = Some(id.clone());
+                    actions.favorite = Some(id.clone());
                 }
                 if let Some(exe) = action.choose_exe {
                     details_choice = Some((entry.game.dir.clone(), exe));
@@ -1658,27 +1650,27 @@ impl eframe::App for App {
                                         || action.favorite
                                         || action.extract.is_some()
                                     {
-                                        clicked_focus = Some(entry.game.key().clone());
+                                        actions.select = Some(entry.game.key().clone());
                                     }
                                     if let Some(dir) = action.extract {
-                                        extract_dir = Some(dir);
+                                        actions.extract = Some(dir);
                                     }
                                     if action.launch {
-                                        launch = Some(i);
+                                        actions.launch = Some(i);
                                     }
                                     if action.cancel_extract {
-                                        cancel_ids.push(entry.game.dir_key());
+                                        actions.cancel_extract.push(entry.game.dir_key());
                                     }
                                     if action.favorite {
-                                        favorite_id = Some(entry.game.key().clone());
+                                        actions.favorite = Some(entry.game.key().clone());
                                     }
                                     if action.details {
-                                        open_details = Some(entry.game.key().clone());
+                                        actions.open_details = Some(entry.game.key().clone());
                                     }
                                     // One click only moves the focus (done above); two open the
                                     // details page, which works for any game, extracted or not.
                                     if action.double_clicked {
-                                        open_details = Some(entry.game.key().clone());
+                                        actions.open_details = Some(entry.game.key().clone());
                                     }
                                 }
                             });
@@ -1745,25 +1737,25 @@ impl eframe::App for App {
         if picker_cancel {
             self.close_picker();
         }
-        if let Some(id) = clicked_focus {
+        if let Some(id) = actions.select.take() {
             self.cursor.select_game(id);
         }
-        for id in cancel_ids {
+        for id in std::mem::take(&mut actions.cancel_extract) {
             self.cancel_extraction(&id);
         }
-        if let Some(i) = launch {
+        if let Some(i) = actions.launch.take() {
             self.launch_game(i);
         }
         if close_chooser {
             self.close_chooser();
         }
-        if let Some(id) = open_details {
+        if let Some(id) = actions.open_details.take() {
             self.open_details_page(id);
         }
         if back {
             self.close_details_page();
         }
-        if let Some(id) = favorite_id {
+        if let Some(id) = actions.favorite.take() {
             self.toggle_favorite(&id);
         }
         if let Some(game) = details_reload {
@@ -1774,12 +1766,12 @@ impl eframe::App for App {
                 Ok(()) => self.rescan(),
                 Err(err) => self.view = View::Error(err.to_string()),
             }
-        } else if let Some(dir) = extract_dir.or(details_extract) {
+        } else if let Some(dir) = actions.extract.take().or(details_extract) {
             self.extract_game(&dir);
-        } else if open_libraries {
+        } else if actions.open_libraries {
             // Applied after the match: the match borrows the view, so the window opens here.
             self.popup = Some(Popup::Libraries);
-        } else if create {
+        } else if actions.create_library {
             self.create_library();
         } else if actions.rescan {
             self.rescan();
