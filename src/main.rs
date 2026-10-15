@@ -1408,6 +1408,7 @@ impl eframe::App for App {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
         let current_scale = self.window.scale();
+        let system_scale = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
         let mut blur_on = self.settings.blur_covers;
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -1429,7 +1430,7 @@ impl eframe::App for App {
                     blur_on = !blur_on;
                 }
                 let response = egui::ComboBox::from_id_salt("ui-scale")
-                    .selected_text(format!("UI x{current_scale:.2}"))
+                    .selected_text(window::scale_label(current_scale, system_scale))
                     .show_ui(ui, |ui| {
                         for preset in window::SCALE_PRESETS {
                             let on = (current_scale - preset).abs() < 1e-3;

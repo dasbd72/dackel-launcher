@@ -3,7 +3,7 @@
 use crate::settings::Settings;
 
 /// UI scales offered in the dropdown.
-pub const SCALE_PRESETS: [f32; 7] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+pub const SCALE_PRESETS: [f32; 6] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75];
 
 /// True in a Steam Deck / Gamescope session. A desktop that merely has gamescope
 /// configured (e.g. a `GAMESCOPECMD` variable) is not.
@@ -29,8 +29,16 @@ pub fn should_minimize_on_launch(deck_like: bool, native_wayland: bool) -> bool 
     deck_like && !native_wayland
 }
 
+/// The Deck's Gaming Mode draws the UI too large at 1.0, so it starts at half size. The scale
+/// multiplies the system's own scale (see `scale_label`), and a saved choice wins over this.
 pub fn default_ui_scale(deck_like: bool) -> f32 {
-    if deck_like { 1.25 } else { 1.0 }
+    if deck_like { 0.5 } else { 1.0 }
+}
+
+/// The scale dropdown's text: the launcher's own scale and the system scale it multiplies, so
+/// a report of a too-large UI says which of the two is responsible.
+pub fn scale_label(scale: f32, system: f32) -> String {
+    format!("UI x{scale:.2} (system x{system:.2})")
 }
 
 /// A saved choice wins; otherwise the Deck starts fullscreen and the desktop windowed.

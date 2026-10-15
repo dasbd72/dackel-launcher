@@ -1,7 +1,7 @@
 use dackel_launcher::settings::Settings;
 use dackel_launcher::window::{
     SCALE_PRESETS, default_ui_scale, initial_fullscreen, is_deck_like, is_native_wayland,
-    should_minimize_on_launch,
+    scale_label, should_minimize_on_launch,
 };
 use std::collections::HashMap;
 
@@ -56,9 +56,9 @@ fn empty_values_do_not_count_as_set() {
 }
 
 #[test]
-fn default_scale_is_larger_on_the_deck() {
+fn default_scale_is_smaller_on_the_deck() {
     assert_eq!(default_ui_scale(false), 1.0);
-    assert_eq!(default_ui_scale(true), 1.25);
+    assert_eq!(default_ui_scale(true), 0.5);
 }
 
 #[test]
@@ -85,14 +85,20 @@ fn a_saved_fullscreen_choice_beats_the_environment() {
 }
 
 #[test]
-fn the_presets_run_from_half_size_to_double_in_quarter_steps() {
-    assert_eq!(SCALE_PRESETS, [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]);
+fn the_presets_run_from_half_size_to_one_and_three_quarters_in_quarter_steps() {
+    assert_eq!(SCALE_PRESETS, [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]);
 }
 
 #[test]
 fn both_machine_defaults_are_selectable_presets() {
     assert!(SCALE_PRESETS.contains(&default_ui_scale(false)));
     assert!(SCALE_PRESETS.contains(&default_ui_scale(true)));
+}
+
+#[test]
+fn the_scale_label_shows_the_system_scale_it_multiplies() {
+    assert_eq!(scale_label(0.5, 1.0), "UI x0.50 (system x1.00)");
+    assert_eq!(scale_label(1.25, 1.5), "UI x1.25 (system x1.50)");
 }
 
 mod restore {
