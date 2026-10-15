@@ -254,7 +254,6 @@ struct App {
     library_input: String,
     library_error: Option<String>,
     view: View,
-    chooser: Option<usize>,
     encoding: Encoding,
     message: Option<String>,
     infos: HashMap<String, GameInfo>,
@@ -329,7 +328,6 @@ impl App {
             library_input: String::new(),
             library_error: None,
             view: View::Missing,
-            chooser: None,
             encoding: Encoding::Auto,
             message: None,
             infos: HashMap::new(),
@@ -379,7 +377,7 @@ impl App {
     }
 
     fn rescan(&mut self) {
-        self.chooser = None;
+        self.close_chooser();
         let extracting: HashSet<String> = self
             .extracting
             .keys()
@@ -812,8 +810,7 @@ impl App {
     }
 
     fn context(&self) -> Context {
-        if self.chooser.is_some()
-            || self.picker.is_some()
+        if self.picker.is_some()
             || self.popup.is_some()
             || self.proton_prompt.is_some()
             || self.overwrite_prompt.is_some()
@@ -1163,8 +1160,22 @@ impl App {
         }
     }
 
+    /// The game the exe chooser is open for, if it is the popup that is open.
+    fn chooser_index(&self) -> Option<usize> {
+        match self.popup {
+            Some(Popup::Chooser(index)) => Some(index),
+            _ => None,
+        }
+    }
+
+    fn close_chooser(&mut self) {
+        if self.chooser_index().is_some() {
+            self.popup = None;
+        }
+    }
+
     fn open_chooser(&mut self, index: usize) {
-        self.chooser = Some(index);
+        self.popup = Some(Popup::Chooser(index));
         self.list_sel = 0;
     }
 
@@ -1245,7 +1256,7 @@ impl App {
                     Some(picker) => self.picker_list(picker).labels.len(),
                     None => match &self.view {
                         View::Games(entries) => self
-                            .chooser
+                            .chooser_index()
                             .and_then(|i| entries.get(i))
                             .map_or(0, |e| e.candidates.len()),
                         _ => 0,
@@ -1273,9 +1284,12 @@ impl App {
                 let View::Games(entries) = &self.view else {
                     return;
                 };
-                let picked = self.chooser.and_then(|i| entries.get(i)).and_then(|e| {
-                    Some((e.game.dir.clone(), e.candidates.get(self.list_sel)?.clone()))
-                });
+                let picked = self
+                    .chooser_index()
+                    .and_then(|i| entries.get(i))
+                    .and_then(|e| {
+                        Some((e.game.dir.clone(), e.candidates.get(self.list_sel)?.clone()))
+                    });
                 if let Some((dir, exe)) = picked {
                     match profile::choose(&dir, &exe) {
                         Ok(()) => self.rescan(),
@@ -1284,7 +1298,6 @@ impl App {
                 }
             }
             Command::ChooserCancel => {
-                self.chooser = None;
                 self.picker = None;
                 self.popup = None;
                 self.proton_prompt = None;
@@ -1828,7 +1841,7 @@ impl eframe::App for App {
             }
         });
 
-        if let (Some(i), View::Games(entries)) = (self.chooser, &self.view)
+        if let (Some(i), View::Games(entries)) = (self.chooser_index(), &self.view)
             && let Some(entry) = entries.get(i)
         {
             egui::Window::new(format!("Choose exe for {}", entry.game.id))
@@ -1891,7 +1904,7 @@ impl eframe::App for App {
             self.launch_game(i);
         }
         if close_chooser {
-            self.chooser = None;
+            self.close_chooser();
         }
         if let Some(id) = open_details {
             self.open_details_page(id);
