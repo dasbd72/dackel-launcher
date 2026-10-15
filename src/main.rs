@@ -31,7 +31,7 @@ use dackel_launcher::reload::Reloads;
 use dackel_launcher::settings::{self, Settings};
 use dackel_launcher::steam_input;
 use dackel_launcher::tuning::reset_prefix;
-use dackel_launcher::window::{self, Restore, RestoreStep};
+use dackel_launcher::window::{self, RestoreStep, WindowCommand, WindowState};
 use details::{DetailsView, TuningEdit, details_ui, exe_choices};
 use eframe::egui;
 use focus::{FocusFrame, Item, bounds};
@@ -270,20 +270,14 @@ struct App {
     cursor: Cursor,
     settings: Settings,
     settings_path: Option<PathBuf>,
-    minimize_on_launch: bool,
-    fullscreen: bool,
-    scale: f32,
-    /// Window changes decided in `apply`, sent to egui at the end of the frame.
-    window_cmds: Vec<egui::ViewportCommand>,
-    zoom_request: Option<f32>,
-    /// Set when a game launch minimized the window, so only then do we bring it back.
+    /// Fullscreen, UI scale, and bringing the window back after a game; its changes are sent
+    /// to egui at the end of the frame.
+    window: WindowState,
     /// Extractions running in the background, by game id.
     extracting: HashMap<String, ExtractJob>,
     blur_cache: BlurCache,
     /// Lets background work ask the window to redraw; set on the first frame.
     repaint: Option<egui::Context>,
-    minimized_by_us: bool,
-    restore: Restore,
     started: std::time::Instant,
 }
 
@@ -335,16 +329,14 @@ impl App {
             cursor: Cursor::new(),
             settings: startup.settings,
             settings_path: startup.settings_path,
-            minimize_on_launch: startup.minimize_on_launch,
-            fullscreen: startup.fullscreen,
-            scale: startup.scale,
-            window_cmds: Vec::new(),
-            zoom_request: None,
+            window: WindowState::new(
+                startup.fullscreen,
+                startup.scale,
+                startup.minimize_on_launch,
+            ),
             extracting: HashMap::new(),
             blur_cache: BlurCache::default(),
             repaint: None,
-            minimized_by_us: false,
-            restore: Restore::default(),
             started: std::time::Instant::now(),
         };
         if tidy {
@@ -647,12 +639,8 @@ impl App {
             .start(&entry.game.dir, state, proton, unix_now())
         {
             Ok(()) => {
-                if self.minimize_on_launch {
-                    // Hand the screen to the game; minimize rather than close.
-                    self.window_cmds
-                        .push(egui::ViewportCommand::Minimized(true));
-                    self.minimized_by_us = true;
-                }
+                // Hand the screen to the game; minimize rather than close.
+                self.window.game_started();
                 self.message = Some(format!("Launched {}", entry.game.id));
                 true
             }
@@ -819,17 +807,13 @@ impl App {
     }
 
     fn toggle_fullscreen(&mut self) {
-        self.fullscreen = !self.fullscreen;
-        self.settings.fullscreen = Some(self.fullscreen);
-        self.window_cmds
-            .push(egui::ViewportCommand::Fullscreen(self.fullscreen));
+        self.settings.fullscreen = Some(self.window.toggle_fullscreen());
         self.save_settings();
     }
 
     fn set_ui_scale(&mut self, scale: f32) {
-        self.scale = scale;
+        self.window.set_scale(scale);
         self.settings.ui_scale = Some(scale);
-        self.zoom_request = Some(scale);
         self.save_settings();
     }
 
@@ -1095,7 +1079,7 @@ impl App {
         Selection {
             sort: self.query.sort,
             encoding: self.encoding,
-            scale: self.scale,
+            scale: self.window.scale(),
             debounce_ms: self.debounce.window(),
             libraries: &self.libraries,
             library_filter: self.library_filter,
@@ -1415,21 +1399,18 @@ impl eframe::App for App {
         let now_ms = self.started.elapsed().as_millis() as u64;
         if was_running && !running {
             self.refresh_stats();
-            if self.minimized_by_us {
-                self.restore.arm(now_ms);
-            }
         }
-        if self.minimized_by_us && !running {
-            // Bring the launcher back once the game is gone. Retried, because the window
-            // manager may refuse while the game's window is still the active one.
-            let minimized = ctx.input(|i| i.viewport().minimized) == Some(true);
-            match self.restore.poll(now_ms, minimized) {
-                RestoreStep::Request => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                }
-                RestoreStep::Done => self.minimized_by_us = false,
-                RestoreStep::Idle => {}
+        // Bring the launcher back once the game is gone. Retried, because the window
+        // manager may refuse while the game's window is still the active one.
+        let step = self
+            .window
+            .after_game_poll(now_ms, was_running, running, || {
+                ctx.input(|i| i.viewport().minimized) == Some(true)
+            });
+        if let Some(step) = step {
+            if step == RestoreStep::Request {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             ctx.request_repaint_after(Duration::from_millis(150));
         }
@@ -1459,9 +1440,9 @@ impl eframe::App for App {
             self.cursor.scroll_requested(),
         );
         // Apply a requested zoom; otherwise notice egui's own Ctrl +/- zoom and remember it.
-        if let Some(zoom) = self.zoom_request.take() {
+        if let Some(zoom) = self.window.take_zoom_request() {
             ctx.set_zoom_factor(zoom);
-        } else if (ctx.zoom_factor() - self.scale).abs() > 1e-3 {
+        } else if self.window.zoom_differs(ctx.zoom_factor()) {
             self.set_ui_scale(ctx.zoom_factor());
         }
 
@@ -1496,7 +1477,7 @@ impl eframe::App for App {
         if !self.busy.is_empty() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
-        let current_scale = self.scale;
+        let current_scale = self.window.scale();
         let mut picked_scale: Option<f32> = None;
         let mut picked_debounce: Option<u64> = None;
         let mut fullscreen_click = false;
@@ -1925,8 +1906,11 @@ impl eframe::App for App {
         } else if rescan {
             self.rescan();
         }
-        for command in self.window_cmds.drain(..) {
-            ctx.send_viewport_cmd(command);
+        for command in self.window.drain_commands() {
+            ctx.send_viewport_cmd(match command {
+                WindowCommand::Fullscreen(on) => egui::ViewportCommand::Fullscreen(on),
+                WindowCommand::Minimize => egui::ViewportCommand::Minimized(true),
+            });
         }
     }
 }
