@@ -1344,14 +1344,6 @@ impl eframe::App for App {
         }
 
         let mut actions = Actions::default();
-        let mut choice = None;
-        let mut close_chooser = false;
-        let mut picker_pick: Option<(Picker, usize)> = None;
-        let mut picker_cancel = false;
-        let mut back = false;
-        let mut details_reload: Option<Game> = None;
-        let mut details_extract: Option<PathBuf> = None;
-        let mut details_choice: Option<(PathBuf, PathBuf)> = None;
         let mut tuning_action: Option<TuningResult> = None;
         // The pin is re-read each frame the page is open, so the first launch shows it at once.
         let tuning_pin = match (&self.screen, &self.view) {
@@ -1576,12 +1568,12 @@ impl eframe::App for App {
                     unpin: action.unpin_proton,
                     reset_prefix: action.reset_prefix,
                 });
-                back = action.back;
+                actions.back = action.back;
                 if action.reload {
-                    details_reload = Some(entry.game.clone());
+                    actions.reload = Some(entry.game.clone());
                 }
                 if action.extract {
-                    details_extract = Some(entry.game.dir.clone());
+                    actions.details_extract = Some(entry.game.dir.clone());
                 }
                 if action.cancel_extract {
                     actions.cancel_extract.push(entry.game.dir_key());
@@ -1593,7 +1585,7 @@ impl eframe::App for App {
                     actions.favorite = Some(id.clone());
                 }
                 if let Some(exe) = action.choose_exe {
-                    details_choice = Some((entry.game.dir.clone(), exe));
+                    actions.details_choice = Some((entry.game.dir.clone(), exe));
                 }
             }
             (_, View::Games(entries)) if entries.is_empty() => {
@@ -1691,10 +1683,10 @@ impl eframe::App for App {
                     if let Some(candidate) =
                         exe_choices(ui, &entry.candidates, Some(self.cursor.list_sel()), None)
                     {
-                        choice = Some((entry.game.dir.clone(), candidate));
+                        actions.choose_exe = Some((entry.game.dir.clone(), candidate));
                     }
                     if ui.button("Cancel").clicked() {
-                        close_chooser = true;
+                        actions.close_chooser = true;
                     }
                 });
         }
@@ -1702,8 +1694,8 @@ impl eframe::App for App {
         if let Some(picker) = self.picker_open() {
             let list = self.picker_list(picker);
             match picker_window(ui.ctx(), &list, self.cursor.list_sel()) {
-                Some(PickerEvent::Pick(i)) => picker_pick = Some((picker, i)),
-                Some(PickerEvent::Cancel) => picker_cancel = true,
+                Some(PickerEvent::Pick(i)) => actions.pick = Some((picker, i)),
+                Some(PickerEvent::Cancel) => actions.cancel_picker = true,
                 None => {}
             }
         }
@@ -1730,11 +1722,11 @@ impl eframe::App for App {
                 })
                 .collect(),
         );
-        if let Some((picker, index)) = picker_pick {
+        if let Some((picker, index)) = actions.pick.take() {
             self.close_picker();
             self.pick(picker, index);
         }
-        if picker_cancel {
+        if actions.cancel_picker {
             self.close_picker();
         }
         if let Some(id) = actions.select.take() {
@@ -1746,27 +1738,27 @@ impl eframe::App for App {
         if let Some(i) = actions.launch.take() {
             self.launch_game(i);
         }
-        if close_chooser {
+        if actions.close_chooser {
             self.close_chooser();
         }
         if let Some(id) = actions.open_details.take() {
             self.open_details_page(id);
         }
-        if back {
+        if actions.back {
             self.close_details_page();
         }
         if let Some(id) = actions.favorite.take() {
             self.toggle_favorite(&id);
         }
-        if let Some(game) = details_reload {
+        if let Some(game) = actions.reload.take() {
             self.infos.reload(game);
         }
-        if let Some((dir, exe)) = details_choice.or(choice) {
+        if let Some((dir, exe)) = actions.details_choice.take().or(actions.choose_exe.take()) {
             match profile::choose(&dir, &exe) {
                 Ok(()) => self.rescan(),
                 Err(err) => self.view = View::Error(err.to_string()),
             }
-        } else if let Some(dir) = actions.extract.take().or(details_extract) {
+        } else if let Some(dir) = actions.extract.take().or(actions.details_extract.take()) {
             self.extract_game(&dir);
         } else if actions.open_libraries {
             // Applied after the match: the match borrows the view, so the window opens here.
