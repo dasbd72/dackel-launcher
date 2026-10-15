@@ -249,6 +249,38 @@ fn a_cursor_whose_game_is_gone_and_whose_page_has_no_games_can_still_move() {
 }
 
 #[test]
+fn a_cursor_left_on_a_game_that_is_no_longer_drawn_lands_on_the_first_item_when_it_moves() {
+    // The library vanished: the page now draws only its own buttons, and nothing told the
+    // cursor its game is gone (the page is not the game list, so no game ids are offered).
+    for dir in [Dir::Up, Dir::Down, Dir::Left, Dir::Right] {
+        let mut cursor = on_the_grid();
+        cursor.move_toward(Dir::Right);
+        assert_eq!(cursor.game(), Some("b"));
+        cursor.end_frame(vec![
+            control(Control::Rescan, 0.0, 0.0),
+            control(Control::AddLibrary, 0.0, 100.0),
+        ]);
+
+        cursor.move_toward(dir);
+
+        assert_eq!(cursor.control(), Some(Control::Rescan), "{dir:?}");
+        assert!(cursor.scroll_requested());
+    }
+}
+
+#[test]
+fn a_cursor_with_nothing_drawn_still_does_nothing_when_its_game_is_unknown() {
+    let mut cursor = on_the_grid();
+    cursor.end_frame(Vec::new());
+
+    cursor.move_toward(Dir::Down);
+
+    assert_eq!(cursor.game(), Some("a"));
+    assert_eq!(cursor.control(), None);
+    assert!(!cursor.scroll_requested());
+}
+
+#[test]
 fn a_press_is_taken_once() {
     let mut cursor = Cursor::new();
     cursor.press(Control::Extract);

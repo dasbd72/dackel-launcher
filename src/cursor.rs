@@ -111,19 +111,18 @@ impl Cursor {
     }
 
     /// Moves focus to the nearest control or tile in `dir`, using where things were drawn.
-    /// With nothing focused (no games to sit on), the first move lands on the first thing
-    /// drawn, so the controller can always reach the toolbar.
+    /// When what has focus is not on screen (nothing is focused, or its game is gone), the
+    /// first move lands on the first thing drawn, so the controller can always reach the
+    /// toolbar.
     pub fn move_toward(&mut self, dir: Dir) {
         let current = match (&self.control, &self.game) {
             (Some(c), _) => Some(Target::Control(*c)),
             (None, Some(id)) => Some(Target::Game(id.clone())),
             (None, None) => None,
         };
-        let to = match current {
-            Some(current) => {
-                let Some(from) = self.slots.iter().position(|s| s.target == current) else {
-                    return;
-                };
+        let from = current.and_then(|c| self.slots.iter().position(|s| s.target == c));
+        let to = match from {
+            Some(from) => {
                 let rects: Vec<Bounds> = self.slots.iter().map(|s| s.bounds).collect();
                 nav::spatial_next(&rects, from, dir)
             }
