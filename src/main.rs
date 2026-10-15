@@ -20,7 +20,8 @@ use dackel_launcher::nav::{
     Repeater,
 };
 use dackel_launcher::pickers::{
-    ENCODINGS, Picker, PickerList, SORTS, debounce_label, encoding_label, sort_label,
+    self, ENCODINGS, Picker, PickerList, SORTS, Selection, debounce_label, encoding_label,
+    sort_label,
 };
 use dackel_launcher::profile::{self, ExeState, Stats};
 use dackel_launcher::proton::{self, ProtonChoice};
@@ -1128,60 +1129,20 @@ impl App {
         self.scroll_to_focus = true;
     }
 
-    fn picker_list(&self, picker: Picker) -> PickerList {
-        match picker {
-            Picker::Sort => PickerList {
-                title: "Sort",
-                labels: SORTS.iter().map(|s| sort_label(*s).to_owned()).collect(),
-                current: SORTS
-                    .iter()
-                    .position(|s| *s == self.query.sort)
-                    .unwrap_or(0),
-            },
-            Picker::Encoding => PickerList {
-                title: "Zip encoding",
-                labels: ENCODINGS
-                    .iter()
-                    .map(|e| encoding_label(*e).to_owned())
-                    .collect(),
-                current: ENCODINGS
-                    .iter()
-                    .position(|e| *e == self.encoding)
-                    .unwrap_or(0),
-            },
-            Picker::Library => {
-                let mut labels = vec!["All libraries".to_owned()];
-                labels.extend(library_labels(&self.libraries));
-                let current = self.library_filter.map_or(0, |slot| slot + 1);
-                PickerList {
-                    title: "Library",
-                    labels,
-                    current,
-                }
-            }
-            Picker::Debounce => PickerList {
-                title: "Press debounce",
-                labels: DEBOUNCE_PRESETS_MS
-                    .iter()
-                    .map(|ms| debounce_label(*ms))
-                    .collect(),
-                current: DEBOUNCE_PRESETS_MS
-                    .iter()
-                    .position(|ms| *ms == self.debounce.window())
-                    .unwrap_or(0),
-            },
-            Picker::Scale => PickerList {
-                title: "UI scale",
-                labels: window::SCALE_PRESETS
-                    .iter()
-                    .map(|p| format!("{p:.2}"))
-                    .collect(),
-                current: window::SCALE_PRESETS
-                    .iter()
-                    .position(|p| (self.scale - p).abs() < 1e-3)
-                    .unwrap_or(0),
-            },
+    /// The values the toolbar dropdowns choose between, as they are now.
+    fn selection(&self) -> Selection<'_> {
+        Selection {
+            sort: self.query.sort,
+            encoding: self.encoding,
+            scale: self.scale,
+            debounce_ms: self.debounce.window(),
+            libraries: &self.libraries,
+            library_filter: self.library_filter,
         }
+    }
+
+    fn picker_list(&self, picker: Picker) -> PickerList {
+        pickers::list(picker, &self.selection())
     }
 
     fn open_picker(&mut self, picker: Picker) {
