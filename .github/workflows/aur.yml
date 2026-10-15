@@ -34,6 +34,8 @@ jobs:
           pkgbuild: PKGBUILD
           updpkgsums: true
           test: true
+          # The action's default adds --nodeps, which would skip installing cargo.
+          test_flags: --clean --cleanbuild --syncdeps --noconfirm
           commit_username: dasbd72
           commit_email: twbd723@gmail.com
           commit_message: Update to ${{ inputs.version || github.ref_name }}
