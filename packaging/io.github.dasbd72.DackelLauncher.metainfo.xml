@@ -27,6 +27,7 @@
     <binary>dackel-launcher</binary>
   </provides>
   <releases>
+    <release version="0.1.2" date="2026-10-16"/>
     <release version="0.1.1" date="2026-10-15"/>
     <release version="0.1.0" date="2026-10-15"/>
   </releases>
