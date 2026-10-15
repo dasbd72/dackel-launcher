@@ -23,7 +23,7 @@ use dackel_launcher::pickers::{
     self, Choice, ENCODINGS, Picker, PickerList, SORTS, Selection, debounce_label, encoding_label,
     sort_label,
 };
-use dackel_launcher::popup::{OVERWRITE_CHOICES, OverwritePrompt, Popup, ProtonPrompt};
+use dackel_launcher::popup::{OVERWRITE_CHOICES, OverwritePrompt, PickTarget, Popup, ProtonPrompt};
 use dackel_launcher::profile::{self, ExeState, Stats};
 use dackel_launcher::proton::{self, ProtonChoice};
 use dackel_launcher::reload::Reloads;
@@ -1288,52 +1288,52 @@ impl App {
                 self.query.favorites_only = false;
             }
             Command::ChooserMove(delta) => {
-                let len = match self.picker_open() {
-                    _ if self.overwrite_prompt_open() => OVERWRITE_CHOICES.len(),
-                    _ if self.proton_prompt_open() => self.prompt_options().len(),
-                    Some(picker) => self.picker_list(picker).labels.len(),
-                    None => match &self.view {
-                        View::Games(entries) => self
-                            .chooser_index()
-                            .and_then(|i| entries.get(i))
-                            .map_or(0, |e| e.candidates.len()),
-                        _ => 0,
-                    },
-                };
+                let len = self.popup.as_ref().map_or(0, |popup| {
+                    popup.list_len(
+                        |game| match &self.view {
+                            View::Games(entries) => {
+                                entries.get(game).map_or(0, |e| e.candidates.len())
+                            }
+                            _ => 0,
+                        },
+                        |picker| self.picker_list(picker).labels.len(),
+                        |_| self.prompt_options().len(),
+                    )
+                });
                 let last = len.saturating_sub(1) as i64;
                 self.list_sel = (self.list_sel as i64 + i64::from(delta)).clamp(0, last) as usize;
             }
             Command::ChooserPick => {
-                if self.overwrite_prompt_open() {
-                    self.answer_overwrite(self.list_sel);
-                    return;
-                }
-                if self.proton_prompt_open() {
-                    if let Some((option, _)) = self.prompt_options().into_iter().nth(self.list_sel)
-                    {
-                        self.answer_prompt(option);
-                    }
-                    return;
-                }
-                if let Some(picker) = self.picker_open() {
-                    self.popup = None;
-                    self.pick(picker, self.list_sel);
-                    return;
-                }
-                let View::Games(entries) = &self.view else {
+                let Some(target) = self.popup.as_ref().map(|popup| popup.pick(self.list_sel))
+                else {
                     return;
                 };
-                let picked = self
-                    .chooser_index()
-                    .and_then(|i| entries.get(i))
-                    .and_then(|e| {
-                        Some((e.game.dir.clone(), e.candidates.get(self.list_sel)?.clone()))
-                    });
-                if let Some((dir, exe)) = picked {
-                    match profile::choose(&dir, &exe) {
-                        Ok(()) => self.rescan(),
-                        Err(err) => self.view = View::Error(err.to_string()),
+                match target {
+                    PickTarget::Overwrite(choice) => self.answer_overwrite(choice),
+                    PickTarget::Proton(index) => {
+                        if let Some((option, _)) = self.prompt_options().into_iter().nth(index) {
+                            self.answer_prompt(option);
+                        }
                     }
+                    PickTarget::Picker(picker, index) => {
+                        self.popup = None;
+                        self.pick(picker, index);
+                    }
+                    PickTarget::Exe { chooser, candidate } => {
+                        let View::Games(entries) = &self.view else {
+                            return;
+                        };
+                        let picked = entries.get(chooser).and_then(|e| {
+                            Some((e.game.dir.clone(), e.candidates.get(candidate)?.clone()))
+                        });
+                        if let Some((dir, exe)) = picked {
+                            match profile::choose(&dir, &exe) {
+                                Ok(()) => self.rescan(),
+                                Err(err) => self.view = View::Error(err.to_string()),
+                            }
+                        }
+                    }
+                    PickTarget::Nothing => {}
                 }
             }
             Command::ChooserCancel => {
@@ -1392,7 +1392,10 @@ impl App {
                 .find(|&(x, y)| nav::stick_dir(x, y).is_some())
                 .unwrap_or((0.0, 0.0));
             // On the details page, pushing the stick up or down scrolls instead of moving focus.
-            let scroll = if (on_details || self.overwrite_prompt_open()) && focused {
+            let scroll = if (on_details
+                || self.popup.as_ref().is_some_and(Popup::scrolls_with_stick))
+                && focused
+            {
                 nav::stick_scroll(stick.0, stick.1)
             } else {
                 0.0
