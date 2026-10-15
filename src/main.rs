@@ -1305,9 +1305,7 @@ impl App {
                 if let (Some(i), View::Games(entries)) = (self.target_index(), &self.view) {
                     let game = entries[i].game.clone();
                     // While a game is extracting, this button cancels that instead.
-                    if self.extracting.contains_key(&game.dir_key())
-                        || self.checking.contains_key(&game.dir_key())
-                    {
+                    if extraction_in_progress(&self.extracting, &self.checking, &game.dir_key()) {
                         self.cancel_extraction(&game.dir_key());
                     } else {
                         self.reload(game);
