@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Dackel Launcher
+GenericName=Game Launcher
+Comment=Launch Windows games with Proton, with gamepad support
+Exec=dackel-launcher
+Icon=io.github.dasbd72.DackelLauncher
+Terminal=false
+Categories=Game;
+Keywords=games;launcher;proton;wine;dlsite;
+StartupWMClass=io.github.dasbd72.DackelLauncher

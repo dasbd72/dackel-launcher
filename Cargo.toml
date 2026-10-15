@@ -1,5 +1,8 @@
 [package]
 name = "dackel-launcher"
+description = "Launch Windows games with Proton, with gamepad support"
+license = "MIT"
+repository = "https://github.com/dasbd72/dlsite-launcher"
 version = "0.1.0"
 edition = "2024"
 

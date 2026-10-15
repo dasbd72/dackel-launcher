@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.dasbd72.DackelLauncher</id>
+  <name>Dackel Launcher</name>
+  <summary>Launch Windows games with Proton, with gamepad support</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.dasbd72">
+    <name>dasbd72</name>
+  </developer>
+  <description>
+    <p>
+      A game library for Linux and the Steam Deck. It lists the game folders in your
+      libraries, extracts zip downloads, and starts each game through umu and Proton.
+    </p>
+    <p>
+      Everything works with a gamepad, a mouse or a keyboard. Each game keeps its own
+      settings, Wine prefix and Proton version, and shows its store information for
+      DLsite games.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.dasbd72.DackelLauncher.desktop</launchable>
+  <url type="homepage">https://github.com/dasbd72/dlsite-launcher</url>
+  <url type="bugtracker">https://github.com/dasbd72/dlsite-launcher/issues</url>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>dackel-launcher</binary>
+  </provides>
+  <releases>
+    <release version="0.1.0" date="2026-10-15"/>
+  </releases>
+</component>

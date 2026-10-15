@@ -56,6 +56,7 @@ fn main() -> eframe::Result {
     let startup = Startup::detect();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_app_id(APP_ID)
             .with_inner_size([1280.0, 720.0])
             .with_fullscreen(startup.fullscreen),
         ..Default::default()
@@ -91,6 +92,8 @@ fn main() -> eframe::Result {
 
 /// Points per second the details page scrolls with the stick pushed all the way.
 const PAD_SCROLL_SPEED: f32 = 500.0;
+/// Matches the desktop entry's `StartupWMClass`, so the menu entry and the window group together.
+const APP_ID: &str = "io.github.dasbd72.DackelLauncher";
 const TILE_WIDTH: f32 = 200.0;
 
 const DEBOUNCE_HELP: &str = "Press debounce\n\
