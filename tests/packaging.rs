@@ -52,3 +52,22 @@ fn the_mit_license_text_ships_with_the_project() {
     assert!(read("LICENSE").starts_with("MIT License"));
     assert!(read("assets/icons/LICENSE-phosphor.txt").contains("Phosphor"));
 }
+
+#[test]
+fn the_release_attaches_everything_the_installer_downloads() {
+    let workflow = read(".github/workflows/release.yml");
+
+    for file in [
+        "dackel-launcher",
+        "umu-run",
+        "install.sh",
+        &format!("{APP_ID}.desktop"),
+        &format!("{APP_ID}.svg"),
+    ] {
+        // Once for the run artifact and once for the release.
+        assert!(
+            workflow.matches(&format!("dist/{file}")).count() >= 2,
+            "the release workflow does not upload {file}"
+        );
+    }
+}

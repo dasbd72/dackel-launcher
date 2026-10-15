@@ -23,9 +23,14 @@ jobs:
       - name: Build
         run: scripts/build-release.sh
 
+      # The installer downloads these files from the release and checks them against SHA256SUMS.
       - name: Checksums
-        working-directory: dist
-        run: sha256sum dackel-launcher umu-run > SHA256SUMS
+        run: |
+          cp scripts/install.sh packaging/io.github.dasbd72.DackelLauncher.desktop \
+            packaging/io.github.dasbd72.DackelLauncher.svg dist/
+          cd dist
+          sha256sum dackel-launcher umu-run io.github.dasbd72.DackelLauncher.desktop \
+            io.github.dasbd72.DackelLauncher.svg install.sh > SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
@@ -33,6 +38,9 @@ jobs:
           path: |
             dist/dackel-launcher
             dist/umu-run
+            dist/install.sh
+            dist/io.github.dasbd72.DackelLauncher.desktop
+            dist/io.github.dasbd72.DackelLauncher.svg
             dist/SHA256SUMS
 
       - name: Attach to the release
@@ -41,4 +49,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes \
-            dist/dackel-launcher dist/umu-run dist/SHA256SUMS
+            dist/dackel-launcher dist/umu-run dist/install.sh \
+            dist/io.github.dasbd72.DackelLauncher.desktop dist/io.github.dasbd72.DackelLauncher.svg \
+            dist/SHA256SUMS
