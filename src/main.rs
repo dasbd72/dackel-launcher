@@ -1281,8 +1281,11 @@ impl App {
                 let entry = &entries[i];
                 let dir = entry.game.dir.clone();
                 if self.launcher.is_running(&dir)
-                    || self.extracting.contains_key(&entry.game.dir_key())
-                    || self.checking.contains_key(&entry.game.dir_key())
+                    || extraction_in_progress(
+                        &self.extracting,
+                        &self.checking,
+                        &entry.game.dir_key(),
+                    )
                 {
                     return;
                 }
