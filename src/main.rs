@@ -279,7 +279,6 @@ struct App {
     nav_items: Vec<Item>,
     /// A control the controller pressed with A, consumed by that control next frame.
     pending_press: Option<Control>,
-    picker: Option<Picker>,
     scroll_to_focus: bool,
     settings: Settings,
     settings_path: Option<PathBuf>,
@@ -353,7 +352,6 @@ impl App {
             control_focus: None,
             nav_items: Vec::new(),
             pending_press: None,
-            picker: None,
             scroll_to_focus: false,
             settings: startup.settings,
             settings_path: startup.settings_path,
@@ -810,11 +808,7 @@ impl App {
     }
 
     fn context(&self) -> Context {
-        if self.picker.is_some()
-            || self.popup.is_some()
-            || self.proton_prompt.is_some()
-            || self.overwrite_prompt.is_some()
-        {
+        if self.popup.is_some() || self.proton_prompt.is_some() || self.overwrite_prompt.is_some() {
             Context::Chooser
         } else if matches!(self.screen, Screen::Details(_)) {
             Context::Details
@@ -1127,9 +1121,23 @@ impl App {
         pickers::list(picker, &self.selection())
     }
 
+    /// The dropdown that is open, if it is the popup that is open.
+    fn picker_open(&self) -> Option<Picker> {
+        match self.popup {
+            Some(Popup::Picker(picker)) => Some(picker),
+            _ => None,
+        }
+    }
+
+    fn close_picker(&mut self) {
+        if self.picker_open().is_some() {
+            self.popup = None;
+        }
+    }
+
     fn open_picker(&mut self, picker: Picker) {
         self.list_sel = self.picker_list(picker).current;
-        self.picker = Some(picker);
+        self.popup = Some(Popup::Picker(picker));
     }
 
     fn pick(&mut self, picker: Picker, index: usize) {
@@ -1250,7 +1258,7 @@ impl App {
                 self.query.favorites_only = false;
             }
             Command::ChooserMove(delta) => {
-                let len = match self.picker {
+                let len = match self.picker_open() {
                     _ if self.overwrite_prompt.is_some() => OVERWRITE_CHOICES.len(),
                     _ if self.proton_prompt.is_some() => self.prompt_options().len(),
                     Some(picker) => self.picker_list(picker).labels.len(),
@@ -1277,7 +1285,8 @@ impl App {
                     }
                     return;
                 }
-                if let Some(picker) = self.picker.take() {
+                if let Some(picker) = self.picker_open() {
+                    self.popup = None;
                     self.pick(picker, self.list_sel);
                     return;
                 }
@@ -1298,7 +1307,6 @@ impl App {
                 }
             }
             Command::ChooserCancel => {
-                self.picker = None;
                 self.popup = None;
                 self.proton_prompt = None;
                 self.overwrite_prompt = None;
@@ -1861,7 +1869,7 @@ impl eframe::App for App {
                 });
         }
 
-        if let Some(picker) = self.picker {
+        if let Some(picker) = self.picker_open() {
             let list = self.picker_list(picker);
             match picker_window(ui.ctx(), &list, self.list_sel) {
                 Some(PickerEvent::Pick(i)) => picker_pick = Some((picker, i)),
@@ -1886,11 +1894,11 @@ impl eframe::App for App {
         self.nav_items = std::mem::take(&mut frame.items);
         self.scroll_to_focus = false;
         if let Some((picker, index)) = picker_pick {
-            self.picker = None;
+            self.close_picker();
             self.pick(picker, index);
         }
         if picker_cancel {
-            self.picker = None;
+            self.close_picker();
         }
         if let Some(id) = clicked_focus {
             self.focus_id = Some(id);
