@@ -1638,6 +1638,10 @@ impl eframe::App for App {
                     .response
                     .on_hover_text(ZIP_ENCODING_HELP);
                 frame.register(ui, Control::Encoding, &response);
+                let response = ui.button("Quit");
+                if frame.pressed(ui, Control::Quit, &response, true) {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
             });
             if matches!(self.screen, Screen::Grid) {
                 ui.horizontal(|ui| {

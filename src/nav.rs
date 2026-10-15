@@ -68,6 +68,7 @@ pub enum Control {
     Sort,
     LibraryFilter,
     FavoritesOnly,
+    Quit,
     // Details page.
     Back,
     /// One of the exe candidates listed on the details page.
