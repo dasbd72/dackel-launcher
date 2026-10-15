@@ -84,18 +84,26 @@ pub fn icon_text_button(ui: &mut Ui, icon: Icon, text: &str, enabled: bool) -> R
     response
 }
 
-/// Vertical padding inside a chip; a label beside a chip adds the same to line up with it.
-pub const CHIP_PAD_Y: i8 = 2;
+/// Vertical padding inside a chip.
+const CHIP_PAD_Y: i8 = 2;
 
 /// A small rounded box with a background, for circle and tag names.
+///
+/// Painted and allocated by hand rather than with a `Frame`: a `Frame` is not wrapped by
+/// `horizontal_wrapped`, so a row of chips ran past the right edge instead of onto a new line.
 pub fn chip(ui: &mut Ui, text: &str) {
-    egui::Frame::new()
-        .fill(ui.visuals().widgets.inactive.bg_fill)
-        .corner_radius(4.0)
-        .inner_margin(egui::Margin::symmetric(7, CHIP_PAD_Y))
-        .show(ui, |ui| {
-            ui.label(text);
-        });
+    let color = ui.visuals().text_color();
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::TextStyle::Body.resolve(ui.style()),
+        color,
+    );
+    let size = galley.size() + vec2(14.0, 2.0 * f32::from(CHIP_PAD_Y));
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 4.0, ui.visuals().widgets.inactive.bg_fill);
+    ui.painter()
+        .galley(rect.min + vec2(7.0, f32::from(CHIP_PAD_Y)), galley, color);
 }
 
 fn allocate(ui: &mut Ui, size: Vec2, enabled: bool) -> (Rect, Response) {

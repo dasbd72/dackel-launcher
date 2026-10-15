@@ -2,7 +2,7 @@
 
 use crate::covers::CoverView;
 use crate::focus::FocusFrame;
-use crate::icons::{CHIP_PAD_Y, Icon, chip, icon_text_button};
+use crate::icons::{Icon, chip, icon_text_button};
 use dackel_launcher::browse::format_play_time;
 use dackel_launcher::extract::{Progress, Status};
 use dackel_launcher::info::GameInfo;
@@ -16,17 +16,13 @@ use std::path::{Path, PathBuf};
 
 const COVER_WIDTH: f32 = 420.0;
 
-/// The label of an info row. Rows are top-aligned; `pad_top` lines the label's text up
-/// with a value that sits inside a padded chip.
-fn row_label(ui: &mut egui::Ui, text: &str, pad_top: f32) {
-    ui.vertical(|ui| {
-        ui.add_space(pad_top);
-        // Never wrap: "Play time" and "Choose exe" must stay on one line.
-        ui.add(
-            egui::Label::new(egui::RichText::new(text).weak())
-                .wrap_mode(egui::TextWrapMode::Extend),
-        );
-    });
+/// The label of an info row. The grid centers each cell vertically, so the label is centered
+/// too and lines up with its value, whether that is text or a chip.
+fn row_label(ui: &mut egui::Ui, text: &str) {
+    // Never wrap: "Play time" and "Choose exe" must stay on one line.
+    ui.add(
+        egui::Label::new(egui::RichText::new(text).weak()).wrap_mode(egui::TextWrapMode::Extend),
+    );
 }
 
 /// The "Launch options" form of the open details page: what is typed, before it is saved.
@@ -124,7 +120,8 @@ pub fn details_ui(
     let mut action = DetailsAction::default();
     let title = view.info.map_or(view.id, |info| info.title.as_str());
 
-    ui.horizontal(|ui| {
+    // Wraps, so a long title pushes the id and store onto the next line instead of past the edge.
+    ui.horizontal_wrapped(|ui| {
         let response = ui.button("Back");
         if frame.pressed(ui, Control::Back, &response, true) {
             action.back = true;
@@ -201,15 +198,13 @@ pub fn details_ui(
                         .num_columns(2)
                         .spacing([16.0, 6.0])
                         .show(ui, |ui| {
-                            let chip_pad = f32::from(CHIP_PAD_Y);
-
                             if let Some(library) = &view.library {
-                                row_label(ui, "Library", 0.0);
+                                row_label(ui, "Library");
                                 ui.label(library);
                                 ui.end_row();
                             }
 
-                            row_label(ui, "Circle", chip_pad);
+                            row_label(ui, "Circle");
                             match view.info.and_then(|i| i.circle.as_deref()) {
                                 Some(circle) => chip(ui, circle),
                                 None => {
@@ -218,7 +213,7 @@ pub fn details_ui(
                             }
                             ui.end_row();
 
-                            row_label(ui, "Tags", chip_pad);
+                            row_label(ui, "Tags");
                             ui.horizontal_wrapped(|ui| {
                                 let genres = view.info.map(|i| i.genres.as_slice()).unwrap_or(&[]);
                                 if genres.is_empty() {
@@ -230,11 +225,11 @@ pub fn details_ui(
                             });
                             ui.end_row();
 
-                            row_label(ui, "Play time", 0.0);
+                            row_label(ui, "Play time");
                             ui.label(format_play_time(view.stats.play_time_secs));
                             ui.end_row();
 
-                            row_label(ui, "Exe", 0.0);
+                            row_label(ui, "Exe");
                             match view.exe {
                                 Some(exe) => {
                                     ui.label(exe.display().to_string());
@@ -246,7 +241,7 @@ pub fn details_ui(
                             ui.end_row();
 
                             if !view.candidates.is_empty() {
-                                row_label(ui, "Choose exe", 0.0);
+                                row_label(ui, "Choose exe");
                                 ui.vertical(|ui| {
                                     action.choose_exe =
                                         exe_choices(ui, view.candidates, None, Some(&mut *frame));
