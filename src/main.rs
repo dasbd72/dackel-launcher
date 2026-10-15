@@ -25,7 +25,7 @@ use dackel_launcher::pickers::{
 use dackel_launcher::popup::{OVERWRITE_CHOICES, OverwritePrompt, PickTarget, Popup, ProtonPrompt};
 use dackel_launcher::profile::{self, ExeState, Stats};
 use dackel_launcher::proton::{self, ProtonChoice};
-use dackel_launcher::reload::Reloads;
+use dackel_launcher::reload::Infos;
 use dackel_launcher::settings::{self, Settings};
 use dackel_launcher::steam_input;
 use dackel_launcher::tuning::reset_prefix;
@@ -35,7 +35,7 @@ use eframe::egui;
 use focus::{FocusFrame, Item, bounds};
 use gilrs::{Axis, Button, EventType, Gilrs};
 use icons::{Icon, icon_button};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -240,10 +240,8 @@ struct App {
     view: View,
     encoding: Encoding,
     message: Option<String>,
-    infos: HashMap<String, GameInfo>,
-    errors: HashMap<String, String>,
-    busy: HashSet<String>,
-    reloads: Reloads,
+    /// Store info for each game, and the reloads of it running in the background.
+    infos: Infos,
     launcher: Launcher<UmuSpawner>,
     screen: Screen,
     query: Query,
@@ -284,10 +282,7 @@ impl App {
             view: View::Missing,
             encoding: Encoding::Auto,
             message: None,
-            infos: HashMap::new(),
-            errors: HashMap::new(),
-            busy: HashSet::new(),
-            reloads: Reloads::new(Arc::new(HttpFetch)),
+            infos: Infos::new(Arc::new(HttpFetch)),
             launcher: Launcher::new(UmuSpawner),
             screen: Screen::Grid,
             query: Query {
@@ -413,36 +408,16 @@ impl App {
         };
         for game in games {
             match load(&game) {
-                Some(info) => {
-                    self.infos.insert(game.key(), info);
-                }
-                None => self.reload(game),
+                Some(info) => self.infos.set(game.key(), info),
+                None => self.infos.reload(game),
             }
-        }
-    }
-
-    fn reload(&mut self, game: Game) {
-        let key = game.key();
-        if self.busy.insert(key.clone()) {
-            self.errors.remove(&key);
-            self.reloads.start(game);
         }
     }
 
     fn collect_reloads(&mut self) {
-        while let Some(done) = self.reloads.try_next() {
-            self.busy.remove(&done.key);
-            // A reload may have replaced the cover, so any blurred copy of it is stale.
+        // A reload may have replaced the cover, so any blurred copy of it is stale.
+        if self.infos.collect() > 0 {
             self.blur_cache.clear();
-            match done.result {
-                Ok(info) => {
-                    self.errors.remove(&done.key);
-                    self.infos.insert(done.key, info);
-                }
-                Err(msg) => {
-                    self.errors.insert(done.key, msg);
-                }
-            }
         }
     }
 
@@ -1157,7 +1132,7 @@ impl App {
                     if self.jobs.in_progress(&game.dir_key()) {
                         self.cancel_extraction(&game.dir_key());
                     } else {
-                        self.reload(game);
+                        self.infos.reload(game);
                     }
                 }
             }
@@ -1416,7 +1391,7 @@ impl eframe::App for App {
             _ => None,
         };
         self.collect_reloads();
-        if !self.busy.is_empty() {
+        if self.infos.any_busy() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
         let current_scale = self.window.scale();
@@ -1616,8 +1591,8 @@ impl eframe::App for App {
                     },
                     candidates: &entry.candidates,
                     extract: &entry.extract,
-                    error: self.errors.get(id).map(String::as_str),
-                    busy: self.busy.contains(id),
+                    error: self.infos.error(id),
+                    busy: self.infos.is_busy(id),
                     running: self.launcher.is_running(&entry.game.dir),
                     extracting: self.jobs.progress(&entry.game.dir_key()),
                     dir: &entry.game.dir,
@@ -1691,11 +1666,8 @@ impl eframe::App for App {
                                     let tile = Tile {
                                         entry,
                                         info: self.infos.get(&entry.game.key()),
-                                        error: self
-                                            .errors
-                                            .get(&entry.game.key())
-                                            .map(String::as_str),
-                                        busy: self.busy.contains(&entry.game.key()),
+                                        error: self.infos.error(&entry.game.key()),
+                                        busy: self.infos.is_busy(&entry.game.key()),
                                         running: self.launcher.is_running(&entry.game.dir),
                                         extracting: self.jobs.progress(&entry.game.dir_key()),
                                         focused: self.cursor.control().is_none()
@@ -1827,7 +1799,7 @@ impl eframe::App for App {
             self.toggle_favorite(&id);
         }
         if let Some(game) = details_reload {
-            self.reload(game);
+            self.infos.reload(game);
         }
         if let Some((dir, exe)) = details_choice.or(choice) {
             match profile::choose(&dir, &exe) {
