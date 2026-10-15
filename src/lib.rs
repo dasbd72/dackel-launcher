@@ -9,6 +9,7 @@ pub mod info;
 pub mod jobs;
 pub mod launch;
 pub mod library;
+pub mod library_list;
 pub mod nav;
 pub mod pickers;
 pub mod popup;
