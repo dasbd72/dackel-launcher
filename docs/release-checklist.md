@@ -35,10 +35,23 @@ It looks for `DLSiteLibrary/` beside itself, so the drive can be mounted anywher
 
 ## Steam Input
 
-Add the binary to Steam as a non-Steam game. Under Controller settings use a **Gamepad**
-layout (or turn Steam Input off for it). The desktop layout turns the sticks into arrow
-keys, so the launcher never sees a stick and each press can arrive twice. If a D-pad press
-still moves twice, raise **Debounce** in the toolbar.
+Steam picks the controller layout per program, and only for programs it started itself.
+So always start the launcher from its Steam shortcut, never from a file manager or terminal.
+
+1. In Steam, **Add a Non-Steam Game** and choose `dlsite-launcher` on the drive.
+2. Open the shortcut's **Controller Settings** (the controller icon on its page).
+3. Under **Steam Input**, pick **Enable Steam Input** (not "Use default settings" if that
+   is the desktop layout).
+4. Choose the **Gamepad** template as its layout and apply it.
+5. Start the launcher with **Play**. Its window now gets the gamepad layout while it is
+   focused; the desktop layout returns when you switch to another window.
+
+Games started from the launcher run inside that same layout, so they see a normal gamepad.
+
+The desktop layout turns the sticks into arrow keys, so the launcher never sees a stick and
+each press can arrive twice. If the launcher was started by Steam but only sees arrow keys,
+it says so in the status line. If a D-pad press still moves twice, raise **Debounce** in the
+toolbar.
 
 ## Checklist
 

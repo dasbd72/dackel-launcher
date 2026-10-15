@@ -23,6 +23,7 @@ use dlsite_launcher::profile::{self, ExeState, Stats};
 use dlsite_launcher::proton::{self, ProtonChoice};
 use dlsite_launcher::reload::Reloads;
 use dlsite_launcher::settings::{self, Settings};
+use dlsite_launcher::steam_input;
 use dlsite_launcher::tuning::reset_prefix;
 use dlsite_launcher::window::{self, Restore, RestoreStep};
 use eframe::egui;
@@ -277,6 +278,7 @@ struct App {
     screen: Screen,
     query: Query,
     gilrs: Option<Gilrs>,
+    steam_watch: steam_input::Watch,
     stick: Repeater,
     /// Drops a press that a second device (Steam's virtual pad) reports again.
     debounce: Debounce,
@@ -353,6 +355,7 @@ impl App {
             gilrs: Gilrs::new()
                 .map_err(|err| eprintln!("gamepad support unavailable: {err}"))
                 .ok(),
+            steam_watch: steam_input::Watch::from_env(),
             stick: Repeater::default(),
             debounce: Debounce::new(startup.settings.debounce_ms.unwrap_or(DEFAULT_DEBOUNCE_MS)),
             focus_id: None,
@@ -1255,6 +1258,7 @@ impl App {
         let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         if let Some(gilrs) = &mut self.gilrs {
             while let Some(event) = gilrs.next_event() {
+                self.steam_watch.pad_seen();
                 if let (true, EventType::ButtonPressed(button, _)) = (focused, event.event)
                     && let Some(input) = pad_input(button)
                 {
@@ -1283,6 +1287,11 @@ impl App {
                 for (key, input) in KEYBOARD {
                     if i.key_pressed(*key) {
                         inputs.push(*input);
+                        if matches!(input, Input::Up | Input::Down | Input::Left | Input::Right)
+                            && let Some(hint) = self.steam_watch.arrow_pressed()
+                        {
+                            self.message = Some(hint.to_owned());
+                        }
                     }
                 }
             });

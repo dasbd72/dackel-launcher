@@ -13,6 +13,7 @@ pub mod profile;
 pub mod proton;
 pub mod reload;
 pub mod settings;
+pub mod steam_input;
 pub mod tuning;
 pub mod umu;
 pub mod window;
