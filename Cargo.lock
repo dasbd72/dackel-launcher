@@ -759,6 +759,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "dackel-launcher"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui_extras",
+ "encoding_rs",
+ "gilrs",
+ "image",
+ "scraper",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
+ "zip",
+]
+
+[[package]]
 name = "data-url"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -819,23 +836,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
  "libloading",
-]
-
-[[package]]
-name = "dlsite-launcher"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui_extras",
- "encoding_rs",
- "gilrs",
- "image",
- "scraper",
- "serde",
- "serde_json",
- "tempfile",
- "ureq",
- "zip",
 ]
 
 [[package]]

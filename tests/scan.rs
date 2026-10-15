@@ -1,4 +1,4 @@
-use dlsite_launcher::library::scan;
+use dackel_launcher::library::scan;
 use std::fs;
 
 fn ids(library: &std::path::Path) -> Vec<String> {

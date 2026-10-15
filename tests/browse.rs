@@ -1,4 +1,4 @@
-use dlsite_launcher::browse::{Card, Query, Sort, browse, format_play_time};
+use dackel_launcher::browse::{Card, Query, Sort, browse, format_play_time};
 
 fn card(id: &str, title: &str) -> Card {
     Card {

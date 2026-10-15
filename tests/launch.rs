@@ -1,4 +1,4 @@
-use dlsite_launcher::launch::plan;
+use dackel_launcher::launch::plan;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -66,8 +66,8 @@ fn proton_path_is_set_only_when_a_proton_is_resolved() {
     assert!(!umu_default.env.contains_key("PROTONPATH"));
 }
 
-use dlsite_launcher::launch::{LaunchError, LaunchPlan, Launcher, Process, Spawner};
-use dlsite_launcher::profile::{ExeState, play_stats};
+use dackel_launcher::launch::{LaunchError, LaunchPlan, Launcher, Process, Spawner};
+use dackel_launcher::profile::{ExeState, play_stats};
 use std::fs;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -207,7 +207,7 @@ fn play_time_accumulates_over_sessions_and_a_game_can_run_again() {
 
 #[test]
 fn the_real_spawner_runs_the_plan_in_its_folder_with_env_and_log() {
-    use dlsite_launcher::launch::UmuSpawner;
+    use dackel_launcher::launch::UmuSpawner;
     use std::time::{Duration, Instant};
 
     let game = tempfile::tempdir().unwrap();

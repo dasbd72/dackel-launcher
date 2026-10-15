@@ -1,5 +1,5 @@
-use dlsite_launcher::extract::{Encoding, Progress};
-use dlsite_launcher::jobs::{ExtractJob, JobStatus};
+use dackel_launcher::extract::{Encoding, Progress};
+use dackel_launcher::jobs::{ExtractJob, JobStatus};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -123,7 +123,7 @@ fn a_pre_cancelled_job_reports_cancelled_and_writes_nothing() {
     let mut job = ExtractJob::start_with_flag(
         dir.path().to_path_buf(),
         Encoding::Auto,
-        dlsite_launcher::extract::Existing::Overwrite,
+        dackel_launcher::extract::Existing::Overwrite,
         flag,
         || {},
     );
@@ -180,7 +180,7 @@ fn a_skipping_job_reports_how_many_files_it_left_alone() {
     let mut job = ExtractJob::start_with(
         dir.path().to_path_buf(),
         Encoding::Auto,
-        dlsite_launcher::extract::Existing::Skip,
+        dackel_launcher::extract::Existing::Skip,
         || {},
     );
 
@@ -197,7 +197,7 @@ fn an_overwrite_check_reports_the_files_a_zip_would_replace() {
     write_zip(&dir.path().join("RJ8.zip"), &[("Game/a.txt", b"zip")]);
     fs::create_dir_all(dir.path().join("Game")).unwrap();
     fs::write(dir.path().join("Game/a.txt"), b"mine").unwrap();
-    let check = dlsite_launcher::jobs::OverwriteCheck::start(
+    let check = dackel_launcher::jobs::OverwriteCheck::start(
         dir.path().to_path_buf(),
         Encoding::Auto,
         || {},

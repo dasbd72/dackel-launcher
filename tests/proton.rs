@@ -1,4 +1,4 @@
-use dlsite_launcher::proton::resolve;
+use dackel_launcher::proton::resolve;
 use std::fs;
 use std::path::{Path, PathBuf};
 

@@ -1,5 +1,5 @@
-use dlsite_launcher::settings::Settings;
-use dlsite_launcher::window::{
+use dackel_launcher::settings::Settings;
+use dackel_launcher::window::{
     SCALE_PRESETS, default_ui_scale, initial_fullscreen, is_deck_like, is_native_wayland,
     should_minimize_on_launch,
 };
@@ -96,7 +96,7 @@ fn both_machine_defaults_are_selectable_presets() {
 }
 
 mod restore {
-    use dlsite_launcher::window::{Restore, RestoreStep};
+    use dackel_launcher::window::{Restore, RestoreStep};
 
     #[test]
     fn nothing_happens_until_it_is_armed() {

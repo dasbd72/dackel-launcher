@@ -1,4 +1,4 @@
-use dlsite_launcher::fonts::{FontSource, locate_in_dirs, parse_fc_match};
+use dackel_launcher::fonts::{FontSource, locate_in_dirs, parse_fc_match};
 use std::fs;
 use std::path::PathBuf;
 

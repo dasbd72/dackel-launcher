@@ -1,4 +1,4 @@
-use dlsite_launcher::umu::{locate, missing_message};
+use dackel_launcher::umu::{locate, missing_message};
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
-const APP_DIR: &str = "dlsite-launcher";
+/// The per-machine config folder inside the config home.
+pub const APP_DIR: &str = "dackel-launcher";
+const LEGACY_APP_DIR: &str = "dlsite-launcher";
 const FILE: &str = "settings.json";
 const MIN_SCALE: f32 = 0.5;
 const MAX_SCALE: f32 = 3.0;
@@ -50,11 +52,23 @@ pub fn save(path: &Path, settings: &Settings) -> io::Result<()> {
     std::fs::write(path, json)
 }
 
-/// `$XDG_CONFIG_HOME/dlsite-launcher/settings.json`, else `~/.config/...`.
+/// `$XDG_CONFIG_HOME/dackel-launcher/settings.json`, else `~/.config/...`.
 pub fn settings_path(xdg_config_home: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
     let base = match xdg_config_home.filter(|p| !p.as_os_str().is_empty()) {
         Some(xdg) => xdg.to_path_buf(),
         None => home.filter(|p| !p.as_os_str().is_empty())?.join(".config"),
     };
     Some(base.join(APP_DIR).join(FILE))
+}
+
+/// Moves the config folder of the program's former name to the current one, once: nothing
+/// happens when there is no old folder or the new one already exists. True when it moved.
+pub fn migrate_legacy_config(config_home: &Path) -> io::Result<bool> {
+    let old = config_home.join(LEGACY_APP_DIR);
+    let new = config_home.join(APP_DIR);
+    if !old.is_dir() || new.exists() {
+        return Ok(false);
+    }
+    std::fs::rename(old, new)?;
+    Ok(true)
 }

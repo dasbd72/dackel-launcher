@@ -1,6 +1,6 @@
 //! What to draw for a game's cover: the real image, or a blurred stand-in.
 
-use dlsite_launcher::blur::blurred_thumbnail;
+use dackel_launcher::blur::blurred_thumbnail;
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

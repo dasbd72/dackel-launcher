@@ -1,9 +1,9 @@
 mod common;
 
 use common::{COVER_URL, PAGE_URL, Site, fixture, game_in};
-use dlsite_launcher::fetch::{Fetch, Fetched};
-use dlsite_launcher::info::{cover_path, load, refresh};
-use dlsite_launcher::library::Game;
+use dackel_launcher::fetch::{Fetch, Fetched};
+use dackel_launcher::info::{cover_path, load, refresh};
+use dackel_launcher::library::Game;
 use std::fs;
 use std::io;
 

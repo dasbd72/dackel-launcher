@@ -1,4 +1,4 @@
-use dlsite_launcher::library::{
+use dackel_launcher::library::{
     AddLibraryError, add_library, library_labels, scan_all, unique_roots,
 };
 use std::fs;

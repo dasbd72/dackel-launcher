@@ -6,7 +6,7 @@
 scripts/build-release.sh
 ```
 
-This builds inside a Debian 12 container (glibc 2.36) and writes `dist/dlsite-launcher`.
+This builds inside a Debian 12 container (glibc 2.36) and writes `dist/dackel-launcher`.
 Building on Arch directly would need Arch's newest glibc, which SteamOS does not have.
 The script prints the highest glibc version the binary asks for; it should be 2.36 or less.
 
@@ -14,7 +14,7 @@ Copy the binary next to the library folder on the drive:
 
 ```
 DLSite/
-  dlsite-launcher
+  dackel-launcher
   DLSiteLibrary/RJ.../
   umu-run
 ```
@@ -25,11 +25,11 @@ It looks for `DLSiteLibrary/` beside itself, so the drive can be mounted anywher
 ## What the Deck needs
 
 - `umu-run`: SteamOS is read-only, so copy `dist/umu-run` (from `scripts/fetch-umu.sh`)
-  beside `dlsite-launcher`. The launcher looks at `$UMU_RUN`, beside itself, the `PATH`,
+  beside `dackel-launcher`. The launcher looks at `$UMU_RUN`, beside itself, the `PATH`,
   then `~/.local/bin`. It needs `python3` (the Deck has it) and the internet on the first
   run, when umu downloads the Steam Linux Runtime.
 - A GE-Proton under
-  `~/.local/share/Steam/compatibilitytools.d/` (or `~/.config/dlsite-launcher/proton-path`
+  `~/.local/share/Steam/compatibilitytools.d/` (or `~/.config/dackel-launcher/proton-path`
   / `$PROTONPATH` pointing at one).
 - A font with Japanese glyphs (SteamOS ships one).
 
@@ -38,7 +38,9 @@ It looks for `DLSiteLibrary/` beside itself, so the drive can be mounted anywher
 Steam picks the controller layout per program, and only for programs it started itself.
 So always start the launcher from its Steam shortcut, never from a file manager or terminal.
 
-1. In Steam, **Add a Non-Steam Game** and choose `dlsite-launcher` on the drive.
+1. In Steam, **Add a Non-Steam Game** and choose `dackel-launcher` on the drive. (The program
+   used to be called `dlsite-launcher`: remove that old shortcut and add this one again, and
+   pick the Gamepad layout for it again, since Steam ties both to the file name.)
 2. Open the shortcut's **Controller Settings** (the controller icon on its page).
 3. Under **Steam Input**, pick **Enable Steam Input** (not "Use default settings" if that
    is the desktop layout).
@@ -59,7 +61,7 @@ Tick each on the **desktop** and on the **Deck**.
 
 | Check | Desktop | Deck |
 | --- | --- | --- |
-| The same `dist/dlsite-launcher` file starts (no `GLIBC_...` or missing-library error) | [ ] | [ ] |
+| The same `dist/dackel-launcher` file starts (no `GLIBC_...` or missing-library error) | [ ] | [ ] |
 | Games from `DLSiteLibrary/` appear, covers and Japanese titles render | [ ] | [ ] |
 | Starts fullscreen on the Deck / windowed on the desktop (Fullscreen button and F11 toggle it) | [ ] | [ ] |
 | D-pad moves focus over the toolbar, tiles and details buttons; A presses; B backs out | [ ] | [ ] |

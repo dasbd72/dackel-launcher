@@ -1,7 +1,7 @@
-use dlsite_launcher::launch::{LaunchPlan, Launcher, Process, Spawner, plan_with};
-use dlsite_launcher::profile::{self, ExeState, Tuning, read_tuning, set_proton_pin, set_tuning};
-use dlsite_launcher::proton::{ProtonChoice, installed, resolve_for_game};
-use dlsite_launcher::tuning::{
+use dackel_launcher::launch::{LaunchPlan, Launcher, Process, Spawner, plan_with};
+use dackel_launcher::profile::{self, ExeState, Tuning, read_tuning, set_proton_pin, set_tuning};
+use dackel_launcher::proton::{ProtonChoice, installed, resolve_for_game};
+use dackel_launcher::tuning::{
     format_env, parse_env, prefix_dir, reset_prefix, split_args, winetricks_command,
 };
 use std::collections::BTreeMap;

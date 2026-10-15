@@ -1,0 +1,44 @@
+name: Release
+
+# Push a tag like v0.2.0 to build the release and attach it to a GitHub release.
+# "Run workflow" (manual) builds the same files and keeps them as a run artifact only.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds in a Debian 12 container, so the binary runs on the Arch desktop and the Deck,
+      # and fetches the pinned umu-run next to it (see scripts/).
+      - name: Build
+        run: scripts/build-release.sh
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum dackel-launcher umu-run > SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dackel-launcher
+          path: |
+            dist/dackel-launcher
+            dist/umu-run
+            dist/SHA256SUMS
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes \
+            dist/dackel-launcher dist/umu-run dist/SHA256SUMS

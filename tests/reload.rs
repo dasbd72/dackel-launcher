@@ -1,7 +1,7 @@
 mod common;
 
 use common::{COVER_URL, PAGE_URL, Site, fixture, game_in};
-use dlsite_launcher::reload::Reloads;
+use dackel_launcher::reload::Reloads;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};

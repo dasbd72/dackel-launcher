@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Puts umu-launcher's standalone build at dist/umu-run, checked against a pinned checksum.
-# Copy it beside dlsite-launcher: SteamOS is read-only, so umu cannot be installed there.
+# Copy it beside dackel-launcher: SteamOS is read-only, so umu cannot be installed there.
 # umu-run is GPL-3 and is shipped as a separate, unmodified file.
 set -euo pipefail
 

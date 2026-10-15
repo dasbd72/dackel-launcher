@@ -1,5 +1,5 @@
-use dlsite_launcher::fetch::{Fetch, Fetched};
-use dlsite_launcher::library::Game;
+use dackel_launcher::fetch::{Fetch, Fetched};
+use dackel_launcher::library::Game;
 use std::collections::HashMap;
 use std::fs;
 use std::io;

@@ -5,7 +5,7 @@
 //! `nav::spatial_next`), so the toolbar, the game tiles and the details-page buttons are
 //! all reached the same way.
 
-use dlsite_launcher::nav::{Bounds, Control};
+use dackel_launcher::nav::{Bounds, Control};
 use eframe::egui::{Color32, Rect, Response, Stroke, StrokeKind, Ui};
 
 /// Something the controller can put focus on.

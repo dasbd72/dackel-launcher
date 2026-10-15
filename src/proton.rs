@@ -73,7 +73,9 @@ pub fn resolve_default() -> io::Result<Option<PathBuf>> {
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| home.join(".config"));
-    let config = config_home.join("dlsite-launcher").join("proton-path");
+    let config = config_home
+        .join(crate::settings::APP_DIR)
+        .join("proton-path");
     let env = std::env::var_os("PROTONPATH")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from);
@@ -169,7 +171,9 @@ pub fn resolve_for_game_default(pinned: Option<&str>) -> io::Result<ProtonChoice
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| home.join(".config"));
-    let config = config_home.join("dlsite-launcher").join("proton-path");
+    let config = config_home
+        .join(crate::settings::APP_DIR)
+        .join("proton-path");
     let env = std::env::var_os("PROTONPATH")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from);

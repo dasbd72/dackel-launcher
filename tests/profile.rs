@@ -1,4 +1,4 @@
-use dlsite_launcher::profile::{ExeState, choose, ensure};
+use dackel_launcher::profile::{ExeState, choose, ensure};
 use std::fs;
 use std::path::{Path, PathBuf};
 

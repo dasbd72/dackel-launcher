@@ -1,4 +1,4 @@
-use dlsite_launcher::extract::{
+use dackel_launcher::extract::{
     Encoding, Existing, ExtractError, Progress, Status, Unsupported, extract, extract_cancellable,
     extract_with_existing, extract_with_progress, overwrites, status,
 };

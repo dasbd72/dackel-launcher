@@ -3,12 +3,12 @@
 use crate::covers::CoverView;
 use crate::focus::FocusFrame;
 use crate::icons::{CHIP_PAD_Y, Icon, chip, icon_text_button};
-use dlsite_launcher::browse::format_play_time;
-use dlsite_launcher::extract::{Progress, Status};
-use dlsite_launcher::info::GameInfo;
-use dlsite_launcher::nav::Control;
-use dlsite_launcher::profile::{self, Stats};
-use dlsite_launcher::tuning::{format_env, parse_env, split_args, winetricks_command};
+use dackel_launcher::browse::format_play_time;
+use dackel_launcher::extract::{Progress, Status};
+use dackel_launcher::info::GameInfo;
+use dackel_launcher::nav::Control;
+use dackel_launcher::profile::{self, Stats};
+use dackel_launcher::tuning::{format_env, parse_env, split_args, winetricks_command};
 use eframe::egui;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

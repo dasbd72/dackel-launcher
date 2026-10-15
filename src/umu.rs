@@ -49,7 +49,7 @@ pub fn locate_default() -> Option<PathBuf> {
 
 /// What to show when no `umu-run` was found.
 pub fn missing_message() -> String {
-    "umu-run not found. Put it beside dlsite-launcher, in ~/.local/bin, or set UMU_RUN.".to_owned()
+    "umu-run not found. Put it beside dackel-launcher, in ~/.local/bin, or set UMU_RUN.".to_owned()
 }
 
 fn is_executable(path: &Path) -> bool {

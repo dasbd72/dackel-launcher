@@ -1,4 +1,4 @@
-use dlsite_launcher::steam_input::{HINT, Watch};
+use dackel_launcher::steam_input::{HINT, Watch};
 
 #[test]
 fn arrow_keys_without_any_pad_event_under_steam_raise_the_hint_once() {

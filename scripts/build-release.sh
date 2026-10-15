@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Builds dist/dlsite-launcher inside a Debian 12 container, so the binary needs only an old
+# Builds dist/dackel-launcher inside a Debian 12 container, so the binary needs only an old
 # glibc and runs on both the Arch desktop and the Steam Deck. Copy it (and dist/umu-run) next to DLSiteLibrary/.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-image=dlsite-launcher-build
+image=dackel-launcher-build
 
 docker build -q -t "$image" -f scripts/Dockerfile.release scripts >/dev/null
 
@@ -18,9 +18,9 @@ docker run --rm \
     "$image" \
     cargo build --release --locked
 
-cp target-docker/release/dlsite-launcher dist/dlsite-launcher
+cp target-docker/release/dackel-launcher dist/dackel-launcher
 scripts/fetch-umu.sh
 
 # Highest glibc version the binary asks for: must stay at or below what the Deck has.
-need=$(objdump -T dist/dlsite-launcher | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
-echo "built dist/dlsite-launcher ($(du -h dist/dlsite-launcher | cut -f1)), needs up to $need"
+need=$(objdump -T dist/dackel-launcher | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+echo "built dist/dackel-launcher ($(du -h dist/dackel-launcher | cut -f1)), needs up to $need"

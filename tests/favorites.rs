@@ -1,4 +1,4 @@
-use dlsite_launcher::profile::{ExeState, Stats, choose, ensure, read_stats, set_favorite};
+use dackel_launcher::profile::{ExeState, Stats, choose, ensure, read_stats, set_favorite};
 use std::fs;
 use std::path::Path;
 

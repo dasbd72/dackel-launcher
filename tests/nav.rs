@@ -1,5 +1,5 @@
 mod commands {
-    use dlsite_launcher::nav::{Command, Context, Dir, Input, command};
+    use dackel_launcher::nav::{Command, Context, Dir, Input, command};
 
     #[test]
     fn dpad_moves_focus_on_the_grid() {
@@ -83,7 +83,7 @@ mod commands {
 }
 
 mod stick {
-    use dlsite_launcher::nav::{Dir, Repeater, stick_dir};
+    use dackel_launcher::nav::{Dir, Repeater, stick_dir};
 
     #[test]
     fn small_deflections_inside_the_dead_zone_do_nothing() {
@@ -139,7 +139,7 @@ mod stick {
 }
 
 mod stick_scroll {
-    use dlsite_launcher::nav::stick_scroll;
+    use dackel_launcher::nav::stick_scroll;
 
     #[test]
     fn inside_the_dead_zone_nothing_scrolls() {
@@ -169,7 +169,7 @@ mod stick_scroll {
 }
 
 mod window_controls {
-    use dlsite_launcher::nav::{Command, Context, Input, command};
+    use dackel_launcher::nav::{Command, Context, Input, command};
 
     #[test]
     fn the_fullscreen_key_works_everywhere_including_behind_a_modal() {
@@ -184,7 +184,7 @@ mod window_controls {
 }
 
 mod blur {
-    use dlsite_launcher::nav::{Command, Context, Input, command};
+    use dackel_launcher::nav::{Command, Context, Input, command};
 
     #[test]
     fn the_blur_key_works_on_every_screen_including_behind_a_modal() {
@@ -199,7 +199,7 @@ mod blur {
 }
 
 mod spatial {
-    use dlsite_launcher::nav::{Bounds, Dir, spatial_next};
+    use dackel_launcher::nav::{Bounds, Dir, spatial_next};
 
     fn b(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
         Bounds {
@@ -307,7 +307,7 @@ mod spatial {
 }
 
 mod duplicates {
-    use dlsite_launcher::nav::{DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Debounce, Input};
+    use dackel_launcher::nav::{DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Debounce, Input};
 
     #[test]
     fn a_wider_window_drops_presses_that_are_further_apart() {

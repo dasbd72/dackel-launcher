@@ -4,28 +4,28 @@ mod focus;
 mod icons;
 
 use covers::{BlurCache, CoverView};
-use details::{DetailsView, TuningEdit, details_ui, exe_choices};
-use dlsite_launcher::browse::{self, Card, Query, Sort};
-use dlsite_launcher::extract::{self, Encoding, Existing, Progress, Status};
-use dlsite_launcher::fetch::HttpFetch;
-use dlsite_launcher::fonts;
-use dlsite_launcher::info::{GameInfo, cover_path, load};
-use dlsite_launcher::jobs::{ExtractJob, JobStatus, OverwriteCheck};
-use dlsite_launcher::launch::{Launcher, UmuSpawner, unix_now};
-use dlsite_launcher::library::{
+use dackel_launcher::browse::{self, Card, Query, Sort};
+use dackel_launcher::extract::{self, Encoding, Existing, Progress, Status};
+use dackel_launcher::fetch::HttpFetch;
+use dackel_launcher::fonts;
+use dackel_launcher::info::{GameInfo, cover_path, load};
+use dackel_launcher::jobs::{ExtractJob, JobStatus, OverwriteCheck};
+use dackel_launcher::launch::{Launcher, UmuSpawner, unix_now};
+use dackel_launcher::library::{
     Game, add_library, library_labels, resolve_library, scan_all, unique_roots,
 };
-use dlsite_launcher::nav::{
+use dackel_launcher::nav::{
     self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Debounce, Input,
     Repeater,
 };
-use dlsite_launcher::profile::{self, ExeState, Stats};
-use dlsite_launcher::proton::{self, ProtonChoice};
-use dlsite_launcher::reload::Reloads;
-use dlsite_launcher::settings::{self, Settings};
-use dlsite_launcher::steam_input;
-use dlsite_launcher::tuning::reset_prefix;
-use dlsite_launcher::window::{self, Restore, RestoreStep};
+use dackel_launcher::profile::{self, ExeState, Stats};
+use dackel_launcher::proton::{self, ProtonChoice};
+use dackel_launcher::reload::Reloads;
+use dackel_launcher::settings::{self, Settings};
+use dackel_launcher::steam_input;
+use dackel_launcher::tuning::reset_prefix;
+use dackel_launcher::window::{self, Restore, RestoreStep};
+use details::{DetailsView, TuningEdit, details_ui, exe_choices};
 use eframe::egui;
 use focus::{FocusFrame, Item, Target, bounds};
 use gilrs::{Axis, Button, EventType, Gilrs};
@@ -61,7 +61,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "DLsite Launcher",
+        "Dackel Launcher",
         options,
         Box::new(move |cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
@@ -127,6 +127,10 @@ impl Startup {
         let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let settings_path = settings::settings_path(xdg.as_deref(), home.as_deref());
+        // Settings of the program's former name carry over once, before anything reads them.
+        if let Some(config_home) = settings_path.as_deref().and_then(|p| p.parent()?.parent()) {
+            let _ = settings::migrate_legacy_config(config_home);
+        }
         let settings = settings_path
             .as_deref()
             .map(settings::load)

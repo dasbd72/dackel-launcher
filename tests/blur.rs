@@ -1,4 +1,4 @@
-use dlsite_launcher::blur::{MAX_SIDE, blurred_thumbnail};
+use dackel_launcher::blur::{MAX_SIDE, blurred_thumbnail};
 use image::{ImageBuffer, Rgba};
 use std::fs;
 
