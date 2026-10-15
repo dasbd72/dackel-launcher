@@ -767,6 +767,7 @@ dependencies = [
  "encoding_rs",
  "gilrs",
  "image",
+ "libc",
  "scraper",
  "serde",
  "serde_json",

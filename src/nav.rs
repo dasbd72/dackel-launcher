@@ -60,6 +60,8 @@ pub enum Control {
     // Toolbar.
     Rescan,
     Libraries,
+    /// On the empty-state page, opens the Libraries window.
+    AddLibrary,
     Fullscreen,
     Blur,
     Scale,

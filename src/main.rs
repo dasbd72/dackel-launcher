@@ -12,7 +12,7 @@ use dackel_launcher::info::{GameInfo, cover_path, load};
 use dackel_launcher::jobs::{ExtractJob, JobStatus, OverwriteCheck};
 use dackel_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dackel_launcher::library::{
-    Game, add_library, library_labels, resolve_library, scan_all, unique_roots,
+    Game, add_library, library_labels, may_create_library, resolve_library, scan_all, unique_roots,
 };
 use dackel_launcher::nav::{
     self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Debounce, Input,
@@ -267,6 +267,8 @@ const OVERWRITE_CHOICES: [&str; 3] = ["Cancel", "Overwrite", "Skip existing"];
 struct App {
     /// The library beside the binary (or `--library`); always first in `libraries`.
     library: PathBuf,
+    /// Whether "Create it" is offered for the folder beside the program.
+    can_create_library: bool,
     /// Every library in use: `library`, then the ones added on this machine.
     libraries: Vec<PathBuf>,
     /// Libraries that could not be read at the last scan (drive unplugged, folder gone).
@@ -337,6 +339,7 @@ struct App {
 
 impl App {
     fn new(library: PathBuf, startup: Startup) -> Self {
+        let can_create_library = may_create_library(&library);
         // A folder listed twice (say, the one beside the program added again) shows once.
         let all: Vec<PathBuf> = std::iter::once(library.clone())
             .chain(startup.settings.libraries.iter().cloned())
@@ -348,6 +351,7 @@ impl App {
         startup.settings.libraries = added;
         let mut app = App {
             library,
+            can_create_library,
             libraries,
             offline: Vec::new(),
             library_filter: None,
@@ -433,18 +437,22 @@ impl App {
             .filter_map(|s| s.games.ok())
             .flatten()
             .collect();
+        let nothing_readable = games.is_empty() && self.offline.len() == self.libraries.len();
         self.view = match primary_error {
-            // Nothing readable at all: the built-in library's own problem is the one to show.
-            Some((kind, _))
-                if games.is_empty()
-                    && kind == ErrorKind::NotFound
-                    && self.offline.len() == self.libraries.len() =>
-            {
+            // Nothing readable and nothing configured: the empty state, with a way to add one.
+            Some((ErrorKind::NotFound, _)) if nothing_readable && self.libraries.len() == 1 => {
                 View::Missing
             }
-            Some((_, msg)) if games.is_empty() && self.offline.len() == self.libraries.len() => {
-                View::Error(msg)
+            // A configured folder is missing: name it, since the system error does not.
+            Some((ErrorKind::NotFound, _)) if nothing_readable => {
+                let missing: Vec<String> = self
+                    .offline
+                    .iter()
+                    .map(|root| root.display().to_string())
+                    .collect();
+                View::Error(format!("Library not found: {}", missing.join(", ")))
             }
+            Some((_, msg)) if nothing_readable => View::Error(msg),
             _ => View::Games(
                 games
                     .into_iter()
@@ -1461,6 +1469,7 @@ impl App {
         inputs
     }
 
+    /// Only reached from the "Create it" button, which is shown only when it is allowed.
     fn create_library(&mut self) {
         match std::fs::create_dir_all(&self.library) {
             Ok(()) => self.rescan(),
@@ -1556,6 +1565,7 @@ impl eframe::App for App {
         let mut rescan = false;
         let mut extract_dir: Option<PathBuf> = None;
         let mut create = false;
+        let mut open_libraries = false;
         let mut choice = None;
         let mut close_chooser = false;
         let mut picker_pick: Option<(Picker, usize)> = None;
@@ -1734,10 +1744,19 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ui, |ui| match (&self.screen, &self.view) {
             (_, View::Missing) => {
-                ui.heading("Library not found");
-                ui.label(format!("{} does not exist.", self.library.display()));
-                if ui.button("Create it").clicked() {
-                    create = true;
+                if self.can_create_library {
+                    ui.heading("Library not found");
+                    ui.label(format!("{} does not exist.", self.library.display()));
+                    if ui.button("Create it").clicked() {
+                        create = true;
+                    }
+                } else {
+                    ui.heading("No library yet");
+                    ui.label("Add a folder that contains your game folders to see them here.");
+                }
+                let response = ui.button("Add a library folder");
+                if frame.pressed(ui, Control::AddLibrary, &response, true) {
+                    open_libraries = true;
                 }
             }
             (_, View::Error(msg)) => {
@@ -1989,6 +2008,9 @@ impl eframe::App for App {
             }
         } else if let Some(dir) = extract_dir.or(details_extract) {
             self.extract_game(&dir);
+        } else if open_libraries {
+            // Applied after the match: the match borrows the view, so the window opens here.
+            self.libraries_open = true;
         } else if create {
             self.create_library();
         } else if rescan {

@@ -21,6 +21,34 @@ pub fn resolve_library(exe_path: &Path, override_dir: Option<&Path>) -> io::Resu
     Ok(exe_dir.join(LIBRARY_DIR))
 }
 
+/// Folders a packaged program is installed into. Nothing is created there, even when the
+/// permissions would allow it.
+const SYSTEM_DIRS: &[&str] = &["/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt", "/app"];
+
+/// Whether the launcher may offer to create `library` (the folder beside the program).
+/// Only when its parent is writable and not a system folder; a packaged install never
+/// offers to write into its own install directory.
+pub fn may_create_library(library: &Path) -> bool {
+    let Some(parent) = library.parent() else {
+        return false;
+    };
+    if SYSTEM_DIRS.iter().any(|dir| parent.starts_with(dir)) {
+        return false;
+    }
+    writable_by_me(parent)
+}
+
+/// Whether the current user may write into `dir`, as the kernel decides (owner, group and
+/// other bits, and read-only mounts). Nothing is written.
+fn writable_by_me(dir: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(path) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `path` is a valid NUL-terminated string for the duration of the call.
+    unsafe { libc::access(path.as_ptr(), libc::W_OK) == 0 }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Game {
     pub id: String,
