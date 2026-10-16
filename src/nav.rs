@@ -32,6 +32,8 @@ pub enum Context {
     Grid,
     Details,
     Chooser,
+    /// A window of controls over the page (the Libraries manager): the D-pad moves focus.
+    Window,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +84,37 @@ pub enum Control {
     Extract,
     CancelExtract,
     Favorite,
+    // Launch options on the details page.
+    LaunchOptions,
+    EnvBox,
+    ArgsBox,
+    SaveTuning,
+    ProtonChoice,
+    CopyWinetricks,
+    ResetPrefix,
+    DeletePrefix,
+    KeepPrefix,
+    // Libraries window.
+    LibraryPath,
+    LibraryAdd,
+    LibraryBrowse,
+    LibraryClose,
+    /// The Remove button of the library in this slot.
+    LibraryRemove(usize),
+}
+
+impl Control {
+    /// Whether the control lives in the Libraries window.
+    pub fn in_library_window(self) -> bool {
+        matches!(
+            self,
+            Control::LibraryPath
+                | Control::LibraryAdd
+                | Control::LibraryBrowse
+                | Control::LibraryClose
+                | Control::LibraryRemove(_)
+        )
+    }
 }
 
 pub fn command(context: Context, input: Input) -> Option<Command> {
@@ -97,6 +130,14 @@ pub fn command(context: Context, input: Input) -> Option<Command> {
         (Context::Chooser, I::A) => Some(ChooserPick),
         (Context::Chooser, I::B) => Some(ChooserCancel),
         (Context::Chooser, _) => None,
+
+        (Context::Window, I::Up) => Some(Move(Dir::Up)),
+        (Context::Window, I::Down) => Some(Move(Dir::Down)),
+        (Context::Window, I::Left) => Some(Move(Dir::Left)),
+        (Context::Window, I::Right) => Some(Move(Dir::Right)),
+        (Context::Window, I::A) => Some(Primary),
+        (Context::Window, I::B) => Some(ChooserCancel),
+        (Context::Window, _) => None,
 
         // The D-pad moves focus on both screens; A presses what is focused.
         (_, I::Up) => Some(Move(Dir::Up)),
@@ -258,6 +299,8 @@ pub fn spatial_next(items: &[Bounds], current: usize, dir: Dir) -> usize {
     /// How much a sideways offset counts against a candidate, per unit, compared with
     /// distance along the direction of travel.
     const SIDEWAYS_WEIGHT: f32 = 3.0;
+    /// The same, for an item that overlaps the current one along the other axis.
+    const IN_LINE_WEIGHT: f32 = 0.2;
 
     let Some(from) = items.get(current) else {
         return current;
@@ -289,7 +332,13 @@ pub fn spatial_next(items: &[Bounds], current: usize, dir: Dir) -> usize {
             if require_overlap && !overlaps {
                 continue;
             }
-            let score = along + SIDEWAYS_WEIGHT * sideways;
+            // Among items in line, the nearest row wins; being off-centre only breaks ties.
+            let weight = if overlaps {
+                IN_LINE_WEIGHT
+            } else {
+                SIDEWAYS_WEIGHT
+            };
+            let score = along + weight * sideways;
             if best.is_none_or(|(s, _)| score < s) {
                 best = Some((score, i));
             }

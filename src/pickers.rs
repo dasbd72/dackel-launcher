@@ -10,6 +10,9 @@ use crate::nav::{Control, DEBOUNCE_PRESETS_MS};
 use crate::window::SCALE_PRESETS;
 use std::path::PathBuf;
 
+/// The Proton list's first entry: no choice, so the newest install is used.
+pub const AUTOMATIC_PROTON: &str = "Automatic (newest GE)";
+
 pub const SORTS: [Sort; 3] = [Sort::LastPlayed, Sort::Title, Sort::DateAdded];
 pub const ENCODINGS: [Encoding; 3] = [Encoding::Auto, Encoding::Cp932, Encoding::Utf8];
 
@@ -21,6 +24,8 @@ pub enum Picker {
     Scale,
     Debounce,
     Library,
+    /// The Proton version of the game on the details page.
+    Proton,
 }
 
 impl Picker {
@@ -32,6 +37,7 @@ impl Picker {
             Control::Scale => Some(Picker::Scale),
             Control::Debounce => Some(Picker::Debounce),
             Control::LibraryFilter => Some(Picker::Library),
+            Control::ProtonChoice => Some(Picker::Proton),
             _ => None,
         }
     }
@@ -54,6 +60,10 @@ pub struct Selection<'a> {
     pub debounce_ms: u64,
     pub libraries: &'a [PathBuf],
     pub library_filter: Option<usize>,
+    /// The Proton versions installed here, for the open game.
+    pub proton_versions: &'a [String],
+    /// The open game's chosen version; `None` is automatic.
+    pub proton_pin: Option<&'a str>,
 }
 
 /// What picking an entry chooses.
@@ -65,6 +75,8 @@ pub enum Choice {
     Debounce(u64),
     /// `None` shows every library.
     LibraryFilter(Option<usize>),
+    /// A slot of `Selection::proton_versions`; `None` is automatic.
+    Proton(Option<usize>),
 }
 
 pub fn sort_label(sort: Sort) -> &'static str {
@@ -130,6 +142,25 @@ pub fn list(picker: Picker, now: &Selection) -> PickerList {
                 .position(|ms| *ms == now.debounce_ms)
                 .unwrap_or(0),
         },
+        Picker::Proton => {
+            let mut labels = vec![AUTOMATIC_PROTON.to_owned()];
+            labels.extend(now.proton_versions.iter().cloned());
+            let current = match now.proton_pin {
+                None => 0,
+                Some(pin) => match now.proton_versions.iter().position(|v| v == pin) {
+                    Some(slot) => slot + 1,
+                    None => {
+                        labels.push(format!("{pin} (not installed)"));
+                        labels.len() - 1
+                    }
+                },
+            };
+            PickerList {
+                title: "Proton",
+                labels,
+                current,
+            }
+        }
         Picker::Scale => PickerList {
             title: "UI scale",
             labels: SCALE_PRESETS.iter().map(|p| format!("{p:.2}")).collect(),
@@ -156,5 +187,6 @@ pub fn pick(picker: Picker, index: usize, library_count: usize) -> Option<Choice
             .copied()
             .map(Choice::Debounce),
         Picker::Scale => SCALE_PRESETS.get(index).copied().map(Choice::Scale),
+        Picker::Proton => Some(Choice::Proton(index.checked_sub(1))),
     }
 }

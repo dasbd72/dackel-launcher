@@ -330,3 +330,41 @@ fn a_list_opens_on_the_given_row_and_reset_goes_back_to_the_first() {
     cursor.reset_list();
     assert_eq!(cursor.list_sel(), 0);
 }
+
+#[test]
+fn focus_lands_on_a_control_that_is_drawn_a_frame_later() {
+    let mut cursor = Cursor::new();
+    cursor.end_frame(vec![
+        control(Control::Back, 0.0, 0.0),
+        control(Control::ResetPrefix, 0.0, 100.0),
+    ]);
+    cursor.focus(Control::KeepPrefix);
+
+    // The next frame draws the prompt's buttons in place of the Reset button.
+    cursor.end_frame(vec![
+        control(Control::Back, 0.0, 0.0),
+        control(Control::KeepPrefix, 0.0, 100.0),
+    ]);
+    cursor.keep_on_page(Page::Details);
+
+    assert_eq!(cursor.control(), Some(Control::KeepPrefix));
+}
+
+#[test]
+fn the_libraries_window_pulls_focus_onto_its_own_controls_once_drawn() {
+    let mut cursor = Cursor::new();
+    cursor.end_frame(vec![game("a", 0.0, 0.0)]);
+    cursor.keep_on_page(Page::Libraries);
+    assert_eq!(cursor.control(), None, "waits until the window was drawn");
+
+    cursor.end_frame(vec![
+        control(Control::LibraryPath, 0.0, 0.0),
+        control(Control::LibraryClose, 0.0, 100.0),
+    ]);
+    cursor.keep_on_page(Page::Libraries);
+    assert_eq!(cursor.control(), Some(Control::LibraryPath));
+
+    cursor.move_toward(Dir::Down);
+    cursor.keep_on_page(Page::Libraries);
+    assert_eq!(cursor.control(), Some(Control::LibraryClose));
+}

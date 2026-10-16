@@ -22,6 +22,8 @@ fn selection(libraries: &[PathBuf]) -> Selection<'_> {
         debounce_ms: 25,
         libraries,
         library_filter: None,
+        proton_versions: &[],
+        proton_pin: None,
     }
 }
 
@@ -279,5 +281,74 @@ mod controls {
         assert_eq!(Picker::for_control(Control::Rescan), None);
         assert_eq!(Picker::for_control(Control::Quit), None);
         assert_eq!(Picker::for_control(Control::Blur), None);
+    }
+}
+
+mod proton {
+    use super::*;
+
+    fn versions() -> Vec<String> {
+        vec!["GE-Proton10-1".to_owned(), "GE-Proton9-27".to_owned()]
+    }
+
+    #[test]
+    fn lists_automatic_then_every_version_with_no_pin_on_automatic() {
+        let libs = libraries(&[]);
+        let installed = versions();
+        let now = Selection {
+            proton_versions: &installed,
+            ..selection(&libs)
+        };
+
+        let l = list(Picker::Proton, &now);
+
+        assert_eq!(
+            l.labels,
+            ["Automatic (newest GE)", "GE-Proton10-1", "GE-Proton9-27"]
+        );
+        assert_eq!(l.current, 0);
+    }
+
+    #[test]
+    fn marks_the_pinned_version_current() {
+        let libs = libraries(&[]);
+        let installed = versions();
+        let now = Selection {
+            proton_versions: &installed,
+            proton_pin: Some("GE-Proton9-27"),
+            ..selection(&libs)
+        };
+
+        assert_eq!(list(Picker::Proton, &now).current, 2);
+    }
+
+    #[test]
+    fn a_pin_that_is_not_installed_is_added_last_and_marked_current() {
+        let libs = libraries(&[]);
+        let installed = versions();
+        let now = Selection {
+            proton_versions: &installed,
+            proton_pin: Some("GE-Proton8-1"),
+            ..selection(&libs)
+        };
+
+        let l = list(Picker::Proton, &now);
+
+        assert_eq!(l.labels.last().unwrap(), "GE-Proton8-1 (not installed)");
+        assert_eq!(l.current, 3);
+    }
+
+    #[test]
+    fn picking_the_first_entry_is_automatic_and_the_rest_are_versions_by_slot() {
+        assert_eq!(pick(Picker::Proton, 0, 0), Some(Choice::Proton(None)));
+        assert_eq!(pick(Picker::Proton, 2, 0), Some(Choice::Proton(Some(1))));
+    }
+
+    #[test]
+    fn the_control_opens_the_proton_list() {
+        assert_eq!(
+            Picker::for_control(Control::ProtonChoice),
+            Some(Picker::Proton)
+        );
     }
 }

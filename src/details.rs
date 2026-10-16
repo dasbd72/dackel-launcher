@@ -8,6 +8,7 @@ use dackel_launcher::extract::{Progress, Status};
 use dackel_launcher::info::GameInfo;
 use dackel_launcher::library::store_of;
 use dackel_launcher::nav::Control;
+use dackel_launcher::pickers::AUTOMATIC_PROTON;
 use dackel_launcher::profile::{self, Stats};
 use dackel_launcher::proton;
 use dackel_launcher::tuning::{format_env, parse_env, split_args, winetricks_command};
@@ -35,7 +36,18 @@ pub struct TuningEdit {
     error: Option<String>,
     confirm_reset: bool,
     /// Proton versions installed here, for the per-game choice.
-    proton_versions: Vec<String>,
+    pub proton_versions: Vec<String>,
+    /// The Proton version chosen for this game; `None` is automatic.
+    pub pin: Option<String>,
+    /// The section is unfolded.
+    open: bool,
+    /// A text box has keyboard focus, so the pad's B and up/down leave it instead of acting
+    /// on the page.
+    pub typing: bool,
+    /// Leave the text box at the next draw.
+    pub leave: bool,
+    /// The control that should get focus once it is drawn (after the reset prompt changes).
+    focus: Option<Control>,
 }
 
 impl TuningEdit {
@@ -48,6 +60,11 @@ impl TuningEdit {
             error: None,
             confirm_reset: false,
             proton_versions: proton::selectable(&proton::compat_dir()).unwrap_or_default(),
+            pin: tuning.proton,
+            open: false,
+            typing: false,
+            leave: false,
+            focus: None,
         }
     }
 }
@@ -70,8 +87,6 @@ pub struct DetailsView<'a> {
     pub extracting: Option<Progress>,
     /// The game's folder, for the winetricks command.
     pub dir: &'a Path,
-    /// The Proton version pinned on the first launch.
-    pub proton_pin: Option<&'a str>,
 }
 
 #[derive(Default)]
@@ -87,6 +102,8 @@ pub struct DetailsAction {
     pub save_tuning: Option<(BTreeMap<String, String>, String)>,
     /// A Proton choice to save: `Some(None)` is Automatic.
     pub set_proton: Option<Option<String>>,
+    /// Move controller focus here (the reset prompt came or went).
+    pub focus: Option<Control>,
     pub reset_prefix: bool,
 }
 
@@ -324,7 +341,7 @@ pub fn details_ui(
                     if let Some(err) = view.error {
                         ui.colored_label(egui::Color32::LIGHT_RED, err);
                     }
-                    launch_options(ui, view, edit, &mut action);
+                    launch_options(ui, view, frame, edit, &mut action);
                 });
             });
 
@@ -355,24 +372,30 @@ pub fn details_ui(
 
 /// The Proton dropdown: Automatic or one installed version, saved as soon as it is picked.
 /// A pin that is not installed here is still listed, marked as such, so it stays visible.
+/// With the controller, A on it opens the same list as a pad popup.
 fn proton_choice(
     ui: &mut egui::Ui,
+    frame: &mut FocusFrame,
     pin: Option<&str>,
     installed: &[String],
     action: &mut DetailsAction,
 ) {
-    const AUTOMATIC: &str = "Automatic (newest GE)";
     let current = match pin {
-        None => AUTOMATIC.to_owned(),
+        None => AUTOMATIC_PROTON.to_owned(),
         Some(pin) if installed.iter().any(|v| v == pin) => pin.to_owned(),
         Some(pin) => format!("{pin} (not installed)"),
     };
-    ui.horizontal(|ui| {
-        ui.label("Proton");
-        egui::ComboBox::from_id_salt("proton-choice")
+    // Label above, dropdown at the left edge, so up/down from Save reaches it.
+    ui.label("Proton");
+    {
+        let combo = egui::ComboBox::from_id_salt("proton-choice")
             .selected_text(current)
             .show_ui(ui, |ui| {
-                if ui.selectable_label(pin.is_none(), AUTOMATIC).clicked() && pin.is_some() {
+                if ui
+                    .selectable_label(pin.is_none(), AUTOMATIC_PROTON)
+                    .clicked()
+                    && pin.is_some()
+                {
                     action.set_proton = Some(None);
                 }
                 for version in installed {
@@ -382,90 +405,238 @@ fn proton_choice(
                     }
                 }
             });
-    });
+        frame.register(ui, Control::ProtonChoice, &combo.response);
+    }
     if installed.is_empty() {
         ui.weak("No Proton found in compatibilitytools.d");
     }
 }
 
-/// Per-game env and arguments, the pinned Proton, the winetricks command and Prefix reset.
+/// Width of the Launch options text boxes.
+const FORM_WIDTH: f32 = 300.0;
+
+fn form_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+    ui.add_enabled(
+        enabled,
+        egui::Button::new(text).min_size(egui::vec2(0.0, crate::icons::BUTTON_HEIGHT)),
+    )
+}
+
+/// A text box the controller can focus: A starts typing in it, and the page's B or
+/// up/down leave it again (see `TuningEdit::leave`).
+pub fn text_box(
+    ui: &mut egui::Ui,
+    frame: &mut FocusFrame,
+    id: Control,
+    edit: egui::TextEdit<'_>,
+) -> egui::Response {
+    let response = ui.add(edit);
+    frame.register(ui, id, &response);
+    if frame.activated(id) {
+        response.request_focus();
+    }
+    response
+}
+
+/// Per-game env and arguments, the Proton choice, the winetricks command and Prefix reset.
+/// Everything in it can be focused with the controller.
 fn launch_options(
     ui: &mut egui::Ui,
     view: &DetailsView,
+    frame: &mut FocusFrame,
     edit: &mut TuningEdit,
     action: &mut DetailsAction,
 ) {
-    egui::CollapsingHeader::new("Launch options").show(ui, |ui| {
-        ui.weak("Environment variables, one KEY=value per line");
-        ui.add(
-            egui::TextEdit::multiline(&mut edit.env_text)
-                .font(egui::TextStyle::Monospace)
-                .desired_rows(3)
-                .desired_width(f32::INFINITY),
-        );
-        ui.weak("Extra arguments");
-        ui.add(egui::TextEdit::singleline(&mut edit.args).desired_width(f32::INFINITY));
-        ui.horizontal(|ui| {
-            if ui.button("Save").clicked() {
-                let checked = parse_env(&edit.env_text).and_then(|env| {
-                    if env.contains_key("WINEPREFIX") {
-                        return Err(
-                            "WINEPREFIX is managed by the launcher (see Reset prefix)".to_owned()
-                        );
-                    }
-                    split_args(&edit.args).map_err(|e| format!("Extra arguments: {e}"))?;
-                    Ok(env)
-                });
-                match checked {
-                    Ok(env) => {
-                        edit.error = None;
-                        action.save_tuning = Some((env, edit.args.clone()));
-                    }
-                    Err(err) => edit.error = Some(err),
-                }
-            }
-            if let Some(err) = &edit.error {
-                ui.colored_label(egui::Color32::LIGHT_RED, err);
-            }
-        });
-
-        ui.separator();
-        proton_choice(ui, view.proton_pin, &edit.proton_versions, action);
-
-        ui.separator();
-        ui.weak("Winetricks for this game's prefix");
-        let command = winetricks_command(view.dir);
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(&command).monospace());
-            if ui.button("Copy").clicked() {
-                ui.ctx().copy_text(command.clone());
-            }
-        });
-
-        ui.separator();
-        if edit.confirm_reset {
-            ui.colored_label(
-                egui::Color32::YELLOW,
-                "Delete this game's Wine prefix? Anything stored inside it, such as installed \
-                 components or saves, is lost. The game's own files are kept.",
+    let shown = egui::CollapsingHeader::new("Launch options")
+        .open(Some(edit.open))
+        .show(ui, |ui| {
+            ui.weak("Environment variables, one KEY=value per line");
+            let env = text_box(
+                ui,
+                frame,
+                Control::EnvBox,
+                egui::TextEdit::multiline(&mut edit.env_text)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_rows(3)
+                    .desired_width(FORM_WIDTH),
             );
+            ui.weak("Extra arguments");
+            let args = text_box(
+                ui,
+                frame,
+                Control::ArgsBox,
+                egui::TextEdit::singleline(&mut edit.args).desired_width(FORM_WIDTH),
+            );
+            edit.typing = env.has_focus() || args.has_focus();
+            if std::mem::take(&mut edit.leave) {
+                env.surrender_focus();
+                args.surrender_focus();
+                edit.typing = false;
+            }
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(!view.running, egui::Button::new("Delete prefix"))
-                    .clicked()
-                {
-                    action.reset_prefix = true;
-                    edit.confirm_reset = false;
+                let save = form_button(ui, "Save", true);
+                if frame.pressed(ui, Control::SaveTuning, &save, true) {
+                    let checked = parse_env(&edit.env_text).and_then(|env| {
+                        if env.contains_key("WINEPREFIX") {
+                            return Err("WINEPREFIX is managed by the launcher (see Reset prefix)"
+                                .to_owned());
+                        }
+                        split_args(&edit.args).map_err(|e| format!("Extra arguments: {e}"))?;
+                        Ok(env)
+                    });
+                    match checked {
+                        Ok(env) => {
+                            edit.error = None;
+                            action.save_tuning = Some((env, edit.args.clone()));
+                        }
+                        Err(err) => edit.error = Some(err),
+                    }
                 }
-                if ui.button("Keep it").clicked() {
-                    edit.confirm_reset = false;
+                if let Some(err) = &edit.error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, err);
                 }
             });
-            if view.running {
-                ui.weak("Close the game first.");
+
+            ui.separator();
+            proton_choice(
+                ui,
+                frame,
+                edit.pin.as_deref(),
+                &edit.proton_versions,
+                action,
+            );
+
+            ui.separator();
+            ui.weak("Winetricks for this game's prefix");
+            let command = winetricks_command(view.dir);
+            ui.label(egui::RichText::new(&command).monospace());
+            let copy = form_button(ui, "Copy", true);
+            if frame.pressed(ui, Control::CopyWinetricks, &copy, true) {
+                ui.ctx().copy_text(command.clone());
             }
-        } else if ui.button("Reset prefix...").clicked() {
-            edit.confirm_reset = true;
+
+            ui.separator();
+            if edit.confirm_reset {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    "Delete this game's Wine prefix? Anything stored inside it, such as \
+                     installed components or saves, is lost. The game's own files are kept.",
+                );
+                ui.horizontal(|ui| {
+                    // Focus starts on the safe answer.
+                    if edit.focus.take() == Some(Control::KeepPrefix) {
+                        action.focus = Some(Control::KeepPrefix);
+                    }
+                    let delete = ui.add_enabled(!view.running, egui::Button::new("Delete prefix"));
+                    if frame.pressed(ui, Control::DeletePrefix, &delete, !view.running) {
+                        action.reset_prefix = true;
+                        edit.confirm_reset = false;
+                        edit.focus = Some(Control::ResetPrefix);
+                    }
+                    let keep = form_button(ui, "Keep it", true);
+                    if frame.pressed(ui, Control::KeepPrefix, &keep, true) {
+                        edit.confirm_reset = false;
+                        edit.focus = Some(Control::ResetPrefix);
+                    }
+                });
+                if view.running {
+                    ui.weak("Close the game first.");
+                }
+            } else {
+                if edit.focus.take() == Some(Control::ResetPrefix) {
+                    action.focus = Some(Control::ResetPrefix);
+                }
+                let reset = form_button(ui, "Reset prefix...", true);
+                if frame.pressed(ui, Control::ResetPrefix, &reset, true) {
+                    edit.confirm_reset = true;
+                    edit.focus = Some(Control::KeepPrefix);
+                }
+            }
+        });
+    if frame.pressed(ui, Control::LaunchOptions, &shown.header_response, true) {
+        edit.open = !edit.open;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dackel_launcher::cursor::Target;
+    use dackel_launcher::nav::{Dir, spatial_next};
+
+    #[test]
+    fn the_dpad_walks_the_launch_options_top_to_bottom_and_back() {
+        let dir = std::env::temp_dir();
+        let mut edit = TuningEdit::load("k".into(), &dir);
+        edit.open = true;
+        let extract: Result<Status, String> = Ok(Status::NotExtracted);
+        let view = DetailsView {
+            id: "RJ1",
+            library: None,
+            info: None,
+            cover: None,
+            cover_view: CoverView::Normal,
+            stats: Stats::default(),
+            exe: None,
+            candidates: &[],
+            extract: &extract,
+            error: None,
+            busy: false,
+            running: false,
+            extracting: None,
+            dir: &dir,
+        };
+        let ctx = egui::Context::default();
+        let mut items = Vec::new();
+        for _ in 0..3 {
+            let mut frame = FocusFrame::new(None, None, false);
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut action = DetailsAction::default();
+                    launch_options(ui, &view, &mut frame, &mut edit, &mut action);
+                },
+            );
+            out.textures_delta.clear();
+            items = std::mem::take(&mut frame.items);
         }
-    });
+        let rects: Vec<_> = items.iter().map(|i| crate::focus::bounds(i.rect)).collect();
+        let at = |c: Control| {
+            items
+                .iter()
+                .position(|i| i.target == Target::Control(c))
+                .unwrap()
+        };
+        let chain = [
+            Control::LaunchOptions,
+            Control::EnvBox,
+            Control::ArgsBox,
+            Control::SaveTuning,
+            Control::ProtonChoice,
+            Control::CopyWinetricks,
+            Control::ResetPrefix,
+        ];
+        for pair in chain.windows(2) {
+            let down = spatial_next(&rects, at(pair[0]), Dir::Down);
+            assert_eq!(
+                items[down].target,
+                Target::Control(pair[1]),
+                "down from {:?}",
+                pair[0]
+            );
+            let up = spatial_next(&rects, at(pair[1]), Dir::Up);
+            assert_eq!(
+                items[up].target,
+                Target::Control(pair[0]),
+                "up from {:?}",
+                pair[1]
+            );
+        }
+    }
 }

@@ -18,7 +18,7 @@ use dackel_launcher::library::{
 };
 use dackel_launcher::library_list::LibraryList;
 use dackel_launcher::nav::{
-    self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Input,
+    self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Dir, Input,
 };
 use dackel_launcher::pad::Pad;
 use dackel_launcher::pickers::{
@@ -32,7 +32,7 @@ use dackel_launcher::reload::Infos;
 use dackel_launcher::settings::{self, Settings};
 use dackel_launcher::tuning::reset_prefix;
 use dackel_launcher::window::{self, RestoreStep, WindowCommand, WindowState};
-use details::{DetailsView, TuningEdit, details_ui, exe_choices};
+use details::{DetailsView, TuningEdit, details_ui, exe_choices, text_box};
 use eframe::egui;
 use egui_file_dialog::{FileDialog, OpeningMode};
 use focus::{FocusFrame, Item, bounds};
@@ -233,6 +233,10 @@ struct App {
     libraries: LibraryList,
     /// The folder browser opened by "Browse..." in the Libraries window.
     browser: FileDialog,
+    /// A text box of the Libraries window has the keyboard; the pad's B and up/down leave it.
+    library_typing: bool,
+    /// Leave that text box at the next draw.
+    library_leave: bool,
     /// The popup that is open, if any.
     popup: Option<Popup>,
     /// How far down the details page is scrolled, in points.
@@ -274,6 +278,8 @@ impl App {
         startup.settings.libraries = added;
         let mut app = App {
             libraries,
+            library_typing: false,
+            library_leave: false,
             browser: FileDialog::new()
                 .title("Add a library folder")
                 .opening_mode(OpeningMode::AlwaysInitialDir)
@@ -777,7 +783,9 @@ impl App {
     }
 
     fn context(&self) -> Context {
-        if self.popup.is_some() {
+        if matches!(self.popup, Some(Popup::Libraries)) {
+            Context::Window
+        } else if self.popup.is_some() {
             Context::Chooser
         } else if matches!(self.screen, Screen::Details(_)) {
             Context::Details
@@ -831,6 +839,9 @@ impl App {
             });
         }
         if let Some(version) = set_proton {
+            if let Some(edit) = self.tuning_edit.as_mut() {
+                edit.pin = version.clone();
+            }
             self.message = Some(match profile::set_proton_pin(&dir, version.as_deref()) {
                 Ok(()) => match version {
                     Some(v) => format!("{id} will launch with {v}"),
@@ -956,11 +967,12 @@ impl App {
     }
 
     /// The manager for the added libraries: list them, add a typed path, remove one.
-    fn libraries_window(&mut self, ctx: &egui::Context) {
+    fn libraries_window(&mut self, ctx: &egui::Context, frame: &mut FocusFrame) {
         let mut remove: Option<usize> = None;
         let mut add = false;
         let mut browse = false;
         let mut close = false;
+        let mut typing = false;
         let rows: Vec<(usize, PathBuf, bool)> = self
             .libraries
             .listed()
@@ -981,40 +993,57 @@ impl App {
                 for (i, root, offline) in &rows {
                     let i = *i;
                     ui.horizontal(|ui| {
+                        // The button first, at the left edge, so up/down reaches it.
+                        if i > 0 {
+                            let button = ui.button("Remove");
+                            if frame.pressed(ui, Control::LibraryRemove(i), &button, true) {
+                                remove = Some(i);
+                            }
+                        }
                         ui.label(root.display().to_string());
                         if *offline {
                             ui.colored_label(egui::Color32::YELLOW, "not found");
                         }
                         if i == 0 {
                             ui.weak("(beside the program)");
-                        } else if ui.button("Remove").clicked() {
-                            remove = Some(i);
                         }
                     });
                 }
                 ui.separator();
                 ui.label("Add a folder that contains RJ game folders:");
                 ui.horizontal(|ui| {
-                    let edit = ui.add(
+                    let edit = text_box(
+                        ui,
+                        frame,
+                        Control::LibraryPath,
                         egui::TextEdit::singleline(self.libraries.input_mut())
                             .desired_width(420.0)
                             .hint_text("/path/to/games"),
                     );
+                    typing = edit.has_focus();
+                    if std::mem::take(&mut self.library_leave) {
+                        edit.surrender_focus();
+                        typing = false;
+                    }
                     let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if ui.button("Add").clicked() || enter {
+                    let button = ui.button("Add");
+                    if frame.pressed(ui, Control::LibraryAdd, &button, true) || enter {
                         add = true;
                     }
-                    if ui.button("Browse...").clicked() {
+                    let button = ui.button("Browse...");
+                    if frame.pressed(ui, Control::LibraryBrowse, &button, true) {
                         browse = true;
                     }
                 });
                 if let Some(err) = &error {
                     ui.colored_label(egui::Color32::LIGHT_RED, err);
                 }
-                if ui.button("Close").clicked() {
+                let button = ui.button("Close");
+                if frame.pressed(ui, Control::LibraryClose, &button, true) {
                     close = true;
                 }
             });
+        self.library_typing = typing;
         if browse {
             self.browser.pick_directory();
         }
@@ -1085,6 +1114,11 @@ impl App {
             debounce_ms: self.pad.debounce_window(),
             libraries: self.libraries.roots(),
             library_filter: self.libraries.filter(),
+            proton_versions: self
+                .tuning_edit
+                .as_ref()
+                .map_or(&[], |e| &e.proton_versions),
+            proton_pin: self.tuning_edit.as_ref().and_then(|e| e.pin.as_deref()),
         }
     }
 
@@ -1148,8 +1182,36 @@ impl App {
             Some(Choice::LibraryFilter(slot)) => self.libraries.set_filter(slot),
             Some(Choice::Debounce(ms)) => self.set_debounce(ms),
             Some(Choice::Scale(scale)) => self.set_ui_scale(scale),
+            Some(Choice::Proton(slot)) => self.choose_proton(slot),
             None => {}
         }
+    }
+
+    /// Saves the Proton picked from the controller's list for the game on the details page.
+    fn choose_proton(&mut self, slot: Option<usize>) {
+        let (Screen::Details(key), View::Games(entries)) = (&self.screen, &self.view) else {
+            return;
+        };
+        let Some(entry) = entries.iter().find(|e| e.game.key() == *key) else {
+            return;
+        };
+        let version = match (slot, &self.tuning_edit) {
+            (None, _) => None,
+            (Some(slot), Some(edit)) => match edit.proton_versions.get(slot) {
+                Some(version) => Some(version.clone()),
+                // The "not installed" entry: the choice stays as it is.
+                None => return,
+            },
+            (Some(_), None) => return,
+        };
+        let result = TuningResult {
+            dir: entry.game.dir.clone(),
+            id: entry.game.id.clone(),
+            save: None,
+            set_proton: Some(version),
+            reset_prefix: false,
+        };
+        self.apply_tuning(result);
     }
 
     /// The game the exe chooser is open for, if it is the popup that is open.
@@ -1172,9 +1234,35 @@ impl App {
     }
 
     fn apply(&mut self, command: Command) {
+        // While a text box has the keyboard, the pad does not drive the page: B and up/down
+        // leave the box, everything else waits.
+        let libraries_open = matches!(self.popup, Some(Popup::Libraries));
+        let typing = if libraries_open {
+            self.library_typing
+        } else {
+            self.tuning_edit.as_ref().is_some_and(|e| e.typing)
+        };
+        if typing {
+            match command {
+                Command::Back | Command::ChooserCancel | Command::Move(Dir::Up | Dir::Down) => {
+                    match self.tuning_edit.as_mut() {
+                        _ if libraries_open => self.library_leave = true,
+                        Some(edit) => edit.leave = true,
+                        None => {}
+                    }
+                    return;
+                }
+                Command::ToggleFullscreen | Command::ToggleBlur => {}
+                _ => return,
+            }
+        }
         match command {
             Command::Move(dir) => self.cursor.move_toward(dir),
             Command::Primary => {
+                // Behind the Libraries window nothing is launched.
+                if matches!(self.popup, Some(Popup::Libraries)) && self.cursor.control().is_none() {
+                    return;
+                }
                 // A control with focus is pressed; the library's dropdowns open a list.
                 if let Some(control) = self.cursor.control() {
                     match Picker::for_control(control) {
@@ -1402,10 +1490,15 @@ impl eframe::App for App {
         // Commands can rescan or re-sort; make sure the cursor is still on a visible game.
         let visible = self.visible();
         self.normalize_focus(&visible);
-        self.cursor.keep_on_page(match self.screen {
-            Screen::Grid => Page::Grid,
-            Screen::Details(_) => Page::Details,
-        });
+        self.cursor
+            .keep_on_page(if matches!(self.popup, Some(Popup::Libraries)) {
+                Page::Libraries
+            } else {
+                match self.screen {
+                    Screen::Grid => Page::Grid,
+                    Screen::Details(_) => Page::Details,
+                }
+            });
         let mut frame = FocusFrame::new(
             self.cursor.control(),
             self.cursor.take_press(),
@@ -1420,15 +1513,6 @@ impl eframe::App for App {
 
         let mut actions = Actions::default();
         let mut tuning_action: Option<TuningResult> = None;
-        // The pin is re-read each frame the page is open, so the first launch shows it at once.
-        let tuning_pin = match (&self.screen, &self.view) {
-            (Screen::Details(key), View::Games(entries)) => entries
-                .iter()
-                .find(|e| e.game.key() == *key)
-                .and_then(|e| profile::read_tuning(&e.game.dir).ok())
-                .and_then(|t| t.proton),
-            _ => None,
-        };
         self.collect_reloads();
         if self.infos.any_busy() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
@@ -1566,6 +1650,7 @@ impl eframe::App for App {
                 "D-pad Move   Left stick Scroll   A Press   B Back   X Reload / Cancel extract   Y Favorite   Start Rescan"
             }
             Context::Chooser => "Up/Down Select   A Pick   B Cancel",
+            Context::Window => "D-pad Move   A Press / Type   B Close (in a text box: leave it)",
         };
         egui::Panel::bottom("hints").show(ui, |ui| {
             ui.weak(hint);
@@ -1624,7 +1709,6 @@ impl eframe::App for App {
                     running: self.launcher.is_running(&entry.game.dir),
                     extracting: self.jobs.progress(&entry.game.dir_key()),
                     dir: &entry.game.dir,
-                    proton_pin: tuning_pin.as_deref(),
                 };
                 if self.tuning_edit.as_ref().is_none_or(|e| e.key != *id) {
                     self.tuning_edit = Some(TuningEdit::load(id.clone(), &entry.game.dir));
@@ -1636,6 +1720,8 @@ impl eframe::App for App {
                 let dt = ui.ctx().input(|i| i.stable_dt).min(0.1);
                 self.details_scroll =
                     (self.details_scroll - self.pad.scroll() * PAD_SCROLL_SPEED * dt).max(0.0);
+                // Drawn again below when the section is open and a text box has the keyboard.
+                edit.typing = false;
                 let action = details_ui(ui, &view, &mut frame, edit, &mut self.details_scroll);
                 tuning_action = Some(TuningResult {
                     dir: entry.game.dir.clone(),
@@ -1644,6 +1730,9 @@ impl eframe::App for App {
                     set_proton: action.set_proton,
                     reset_prefix: action.reset_prefix,
                 });
+                if let Some(control) = action.focus {
+                    self.cursor.focus(control);
+                }
                 actions.back = action.back;
                 if action.reload {
                     actions.reload = Some(entry.game.clone());
@@ -1777,7 +1866,9 @@ impl eframe::App for App {
         }
 
         if matches!(self.popup, Some(Popup::Libraries)) {
-            self.libraries_window(ui.ctx());
+            // Only the window's own controls can be focused while it is open.
+            frame.items.clear();
+            self.libraries_window(ui.ctx(), &mut frame);
         }
         if self.proton_prompt_open() {
             self.proton_prompt_window(ui.ctx());

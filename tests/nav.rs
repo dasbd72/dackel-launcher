@@ -372,3 +372,40 @@ mod duplicates {
         assert!(!d.accept(1015, Input::A), "A was seen 10 ms ago");
     }
 }
+
+#[test]
+fn in_a_window_the_dpad_moves_focus_a_presses_and_b_closes() {
+    use dackel_launcher::nav::{Command, Context, Dir, Input, command};
+
+    assert_eq!(
+        command(Context::Window, Input::Down),
+        Some(Command::Move(Dir::Down))
+    );
+    assert_eq!(command(Context::Window, Input::A), Some(Command::Primary));
+    assert_eq!(
+        command(Context::Window, Input::B),
+        Some(Command::ChooserCancel)
+    );
+    assert_eq!(command(Context::Window, Input::X), None);
+}
+
+#[test]
+fn down_goes_to_the_next_row_even_when_a_wider_item_is_off_centre() {
+    use dackel_launcher::nav::{Bounds, Dir, spatial_next};
+
+    let b = |left, top, right, bottom| Bounds {
+        left,
+        top,
+        right,
+        bottom,
+    };
+    // A narrow header, a wide text box below it, then a narrow button under that.
+    let items = [
+        b(0.0, 0.0, 100.0, 20.0),
+        b(0.0, 40.0, 300.0, 80.0),
+        b(0.0, 100.0, 40.0, 130.0),
+    ];
+
+    assert_eq!(spatial_next(&items, 0, Dir::Down), 1);
+    assert_eq!(spatial_next(&items, 2, Dir::Up), 1);
+}

@@ -26,6 +26,8 @@ pub struct Slot {
 pub enum Page {
     Grid,
     Details,
+    /// The Libraries window is open over the page.
+    Libraries,
 }
 
 #[derive(Debug)]
@@ -101,6 +103,10 @@ impl Cursor {
             // The slots are still the previous page's layout until the details page has been
             // drawn once (its Back button is the first thing it registers).
             (Page::Details, _) if !drawn(Control::Back) => {}
+            // The Libraries window keeps focus on its own controls, once it has been drawn.
+            (Page::Libraries, _) if !drawn(Control::LibraryClose) => {}
+            (Page::Libraries, Some(c)) if c.in_library_window() && drawn(c) => {}
+            (Page::Libraries, _) => self.control = Some(Control::LibraryPath),
             // The details page always has focus on one of its controls.
             (Page::Details, Some(c)) if drawn(c) => {}
             (Page::Details, _) => self.control = Some(Control::Back),
@@ -141,6 +147,12 @@ impl Cursor {
                 self.scroll = true;
             }
         }
+    }
+
+    /// Puts focus on a control that is about to be drawn (the page changed under it).
+    pub fn focus(&mut self, control: Control) {
+        self.control = Some(control);
+        self.scroll = true;
     }
 
     /// The user picked a game tile directly (a click).
