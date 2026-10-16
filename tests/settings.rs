@@ -18,7 +18,8 @@ fn saved_settings_round_trip_and_create_the_config_folder() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dackel-launcher").join("settings.json");
     let wanted = Settings {
-        ui_scale: Some(1.5),
+        screen_scale: Some(1.75),
+        ui_scale: None,
         fullscreen: Some(true),
         blur_covers: true,
         debounce_ms: Some(50),
@@ -142,4 +143,22 @@ fn no_extra_libraries_by_default_and_old_files_still_load() {
     fs::write(&path, br#"{"ui_scale": 1.5}"#).unwrap();
 
     assert!(load(&path).libraries.is_empty());
+}
+
+#[test]
+fn the_size_on_screen_is_clamped_and_an_old_zoom_is_not_written_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    fs::write(&path, r#"{"screen_scale": 9.0}"#).unwrap();
+    assert_eq!(load(&path).screen_scale, Some(4.0));
+    fs::write(&path, r#"{"screen_scale": 0.0}"#).unwrap();
+    assert_eq!(load(&path).screen_scale, Some(0.5));
+
+    let migrated = Settings {
+        screen_scale: Some(1.5),
+        ui_scale: None,
+        ..Settings::default()
+    };
+    save(&path, &migrated).unwrap();
+    assert!(!fs::read_to_string(&path).unwrap().contains("ui_scale"));
 }

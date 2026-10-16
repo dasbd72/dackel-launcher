@@ -23,23 +23,68 @@ fn toggling_fullscreen_flips_it_and_queues_the_new_value() {
 }
 
 #[test]
-fn setting_the_scale_remembers_it_and_asks_for_one_zoom() {
+fn setting_the_size_remembers_it_and_asks_for_one_zoom() {
     let mut w = state(false);
+    w.see_system_scale(Some(2.0));
+    w.take_zoom_request();
 
-    w.set_scale(1.5);
+    w.set_size(1.5);
 
-    assert_eq!(w.scale(), 1.5);
-    assert_eq!(w.take_zoom_request(), Some(1.5));
+    assert_eq!(w.size(), 1.5);
+    assert_eq!(w.take_zoom_request(), Some(0.75));
     assert_eq!(w.take_zoom_request(), None);
 }
 
 #[test]
-fn a_zoom_close_to_the_scale_is_the_same_scale() {
-    let w = WindowState::new(false, 1.25, false);
+fn seeing_the_system_scale_for_the_first_time_asks_for_the_zoom_that_gives_the_size() {
+    let mut w = WindowState::new(false, 1.5, false);
+    assert_eq!(w.take_zoom_request(), None);
 
-    assert!(!w.zoom_differs(1.25));
-    assert!(!w.zoom_differs(1.2505));
-    assert!(w.zoom_differs(1.5));
+    assert!(w.see_system_scale(Some(3.0)));
+
+    assert!(w.synced());
+    assert_eq!(w.take_zoom_request(), Some(0.5));
+    assert!(!w.see_system_scale(Some(3.0)), "only the first time");
+    assert_eq!(w.take_zoom_request(), None);
+}
+
+#[test]
+fn a_changed_system_scale_keeps_the_size_by_changing_the_zoom() {
+    let mut w = WindowState::new(false, 1.5, false);
+    w.see_system_scale(Some(3.0));
+    w.take_zoom_request();
+
+    w.see_system_scale(Some(1.5));
+
+    assert_eq!(w.size(), 1.5);
+    assert_eq!(w.take_zoom_request(), Some(1.0));
+}
+
+#[test]
+fn a_missing_system_scale_is_waited_for_a_few_frames_then_the_size_is_the_zoom() {
+    let mut w = WindowState::new(false, 0.5, false);
+
+    for _ in 0..4 {
+        assert!(!w.see_system_scale(None));
+        assert!(!w.synced());
+        assert_eq!(w.take_zoom_request(), None);
+    }
+
+    assert!(w.see_system_scale(None));
+    assert!(w.synced());
+    assert_eq!(w.take_zoom_request(), Some(0.5));
+}
+
+#[test]
+fn a_zoom_close_to_the_one_the_size_gives_is_not_the_user_zooming() {
+    let mut w = WindowState::new(false, 1.5, false);
+    assert!(!w.zoom_differs(0.9), "not before the system scale is known");
+    w.see_system_scale(Some(3.0));
+
+    assert!(!w.zoom_differs(0.5));
+    assert!(!w.zoom_differs(0.5005));
+    assert!(w.zoom_differs(0.6));
+    assert_eq!(w.size_of_zoom(0.6), 1.8);
 }
 
 #[test]

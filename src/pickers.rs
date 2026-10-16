@@ -1,4 +1,4 @@
-//! The toolbar dropdowns: sort, zip encoding, UI scale, press debounce and library filter.
+//! The toolbar dropdowns: sort, zip encoding, UI size, press debounce and library filter.
 //!
 //! Each one is described here once: its title, its entries, which entry is current, and what
 //! picking an entry chooses. The window that draws the list stays in the binary.
@@ -162,7 +162,7 @@ pub fn list(picker: Picker, now: &Selection) -> PickerList {
             }
         }
         Picker::Scale => PickerList {
-            title: "UI scale",
+            title: "Size on screen",
             labels: SCALE_PRESETS.iter().map(|p| format!("{p:.2}")).collect(),
             current: SCALE_PRESETS
                 .iter()

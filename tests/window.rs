@@ -1,7 +1,7 @@
 use dackel_launcher::settings::Settings;
 use dackel_launcher::window::{
-    SCALE_PRESETS, default_ui_scale, initial_fullscreen, is_deck_like, is_native_wayland,
-    scale_label, should_minimize_on_launch,
+    DEFAULT_SIZE, SCALE_PRESETS, initial_fullscreen, initial_size, is_deck_like, is_native_wayland,
+    scale_label, should_minimize_on_launch, size_for, zoom_for,
 };
 use std::collections::HashMap;
 
@@ -56,9 +56,74 @@ fn empty_values_do_not_count_as_set() {
 }
 
 #[test]
-fn default_scale_is_smaller_on_the_deck() {
-    assert_eq!(default_ui_scale(false), 1.0);
-    assert_eq!(default_ui_scale(true), 0.5);
+fn a_size_on_screen_is_turned_into_a_zoom_by_the_system_scale_and_back() {
+    assert_eq!(zoom_for(1.5, Some(3.0)), 0.5);
+    assert_eq!(zoom_for(1.5, Some(1.0)), 1.5);
+    assert_eq!(size_for(0.5, Some(3.25)), 1.63);
+    for system in [1.0_f32, 1.25, 2.0, 3.25] {
+        let back = size_for(zoom_for(1.75, Some(system)), Some(system));
+        assert!((back - 1.75).abs() < 0.01, "{system}: {back}");
+    }
+}
+
+#[test]
+fn without_a_usable_system_scale_the_size_is_the_zoom() {
+    for system in [None, Some(0.0), Some(-1.0), Some(f32::NAN)] {
+        assert_eq!(zoom_for(1.5, system), 1.5, "{system:?}");
+        assert_eq!(size_for(1.5, system), 1.5, "{system:?}");
+    }
+}
+
+#[test]
+fn the_zoom_stays_in_a_usable_range() {
+    assert_eq!(zoom_for(1.5, Some(100.0)), 0.1);
+    assert_eq!(zoom_for(2.5, Some(0.1)), 4.0);
+}
+
+#[test]
+fn a_saved_size_wins_over_everything() {
+    assert_eq!(
+        initial_size(Some(2.0), Some(0.5), true, Some(3.25)),
+        (2.0, false)
+    );
+}
+
+#[test]
+fn an_old_saved_zoom_becomes_the_size_it_gave_and_is_saved_once() {
+    assert_eq!(
+        initial_size(None, Some(0.5), true, Some(3.25)),
+        (1.63, true)
+    );
+    assert_eq!(
+        initial_size(None, Some(1.25), false, Some(1.0)),
+        (1.25, true)
+    );
+}
+
+#[test]
+fn an_old_saved_zoom_is_used_as_it_is_when_the_system_scale_is_unknown() {
+    assert_eq!(initial_size(None, Some(0.75), true, None), (0.75, false));
+}
+
+#[test]
+fn with_nothing_saved_the_size_is_the_default_when_the_system_scale_is_known() {
+    for deck_like in [false, true] {
+        assert_eq!(
+            initial_size(None, None, deck_like, Some(3.25)),
+            (DEFAULT_SIZE, false)
+        );
+        assert_eq!(
+            initial_size(None, None, deck_like, Some(1.0)),
+            (DEFAULT_SIZE, false)
+        );
+    }
+}
+
+#[test]
+fn with_nothing_saved_and_no_system_scale_the_old_fallbacks_stay() {
+    assert_eq!(initial_size(None, None, true, None), (0.5, false));
+    assert_eq!(initial_size(None, None, false, None), (1.0, false));
+    assert_eq!(initial_size(None, None, true, Some(f32::NAN)), (0.5, false));
 }
 
 #[test]
@@ -85,25 +150,20 @@ fn a_saved_fullscreen_choice_beats_the_environment() {
 }
 
 #[test]
-fn the_presets_run_from_half_size_to_one_and_three_quarters_in_quarter_steps() {
-    assert_eq!(SCALE_PRESETS, [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]);
+fn the_presets_are_sizes_from_three_quarters_to_two_and_a_half() {
+    assert_eq!(SCALE_PRESETS, [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5]);
+    assert!(SCALE_PRESETS.contains(&DEFAULT_SIZE));
 }
 
 #[test]
-fn both_machine_defaults_are_selectable_presets() {
-    assert!(SCALE_PRESETS.contains(&default_ui_scale(false)));
-    assert!(SCALE_PRESETS.contains(&default_ui_scale(true)));
-}
-
-#[test]
-fn the_scale_label_shows_the_system_scale_it_multiplies() {
-    assert_eq!(scale_label(0.5, Some(1.0)), "UI x0.50 (system x1.00)");
-    assert_eq!(scale_label(1.25, Some(1.5)), "UI x1.25 (system x1.50)");
+fn the_scale_label_shows_the_system_scale_the_size_is_made_from() {
+    assert_eq!(scale_label(1.5, Some(3.25)), "Size x1.50 (system x3.25)");
+    assert_eq!(scale_label(1.25, Some(1.0)), "Size x1.25 (system x1.00)");
 }
 
 #[test]
 fn the_scale_label_says_so_when_the_system_scale_is_unknown() {
-    assert_eq!(scale_label(0.5, None), "UI x0.50 (system ?)");
+    assert_eq!(scale_label(0.5, None), "Size x0.50 (system ?)");
 }
 
 mod restore {

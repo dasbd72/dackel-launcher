@@ -99,7 +99,8 @@ fn main() -> eframe::Result {
                 }
             });
             install_japanese_font(&cc.egui_ctx);
-            cc.egui_ctx.set_zoom_factor(startup.scale);
+            // A stand-in until the window system reports its scale and the real zoom can be worked out.
+            cc.egui_ctx.set_zoom_factor(startup.first_zoom);
             Ok(Box::new(App::new(library, startup)))
         }),
     )
@@ -138,6 +139,9 @@ struct Startup {
     minimize_on_launch: bool,
     fullscreen: bool,
     scale: f32,
+    /// The zoom to draw with until the system's scale is known.
+    first_zoom: f32,
+    deck_like: bool,
 }
 
 impl Startup {
@@ -153,12 +157,13 @@ impl Startup {
         let native_wayland = window::is_native_wayland(|key| std::env::var(key).ok());
         Startup {
             fullscreen: window::initial_fullscreen(&settings, deck_like),
-            scale: settings
-                .ui_scale
-                .unwrap_or_else(|| window::default_ui_scale(deck_like)),
+            scale: window::initial_size(settings.screen_scale, settings.ui_scale, deck_like, None)
+                .0,
+            first_zoom: window::initial_size(None, None, deck_like, None).0,
             settings,
             settings_path,
             minimize_on_launch: window::should_minimize_on_launch(deck_like, native_wayland),
+            deck_like,
         }
     }
 }
@@ -254,6 +259,11 @@ struct App {
     libraries: LibraryList,
     /// The folder browser opened by "Browse..." in the Libraries window.
     browser: FileDialog,
+    /// Whether the session is a Deck's; picks the fallback UI scale.
+    deck_like: bool,
+    /// The size on screen is worked out from the system scale once the window system has
+    /// reported it (the saved size, an old zoom to convert, or the default).
+    size_pending: bool,
     /// Steam's folder, when Steam is installed for this user.
     steam_root: Option<PathBuf>,
     /// Whether the game on the details page has a Steam entry (game folder, answer).
@@ -307,6 +317,8 @@ impl App {
         startup.settings.libraries = added;
         let mut app = App {
             libraries,
+            deck_like: startup.deck_like,
+            size_pending: true,
             steam_root: std::env::var_os("HOME")
                 .and_then(|home| steam::steam_root(Path::new(&home))),
             steam_cache: std::cell::RefCell::new(None),
@@ -843,7 +855,7 @@ impl App {
             self.set_debounce(ms);
         }
         if let Some(scale) = actions.scale {
-            self.set_ui_scale(scale);
+            self.set_screen_size(scale);
         }
     }
 
@@ -957,9 +969,16 @@ impl App {
         self.save_settings();
     }
 
-    fn set_ui_scale(&mut self, scale: f32) {
-        self.window.set_scale(scale);
-        self.settings.ui_scale = Some(scale);
+    /// Chooses a size on screen, from the dropdown.
+    fn set_screen_size(&mut self, size: f32) {
+        self.size_pending = false;
+        self.window.set_size(size);
+        self.remember_size(size);
+    }
+
+    fn remember_size(&mut self, size: f32) {
+        self.settings.screen_scale = Some(size);
+        self.settings.ui_scale = None;
         self.save_settings();
     }
 
@@ -1250,7 +1269,7 @@ impl App {
         Selection {
             sort: self.query.sort,
             encoding: self.encoding,
-            scale: self.window.scale(),
+            scale: self.window.size(),
             debounce_ms: self.pad.debounce_window(),
             libraries: self.libraries.roots(),
             library_filter: self.libraries.filter(),
@@ -1321,7 +1340,7 @@ impl App {
             Some(Choice::Encoding(encoding)) => self.encoding = encoding,
             Some(Choice::LibraryFilter(slot)) => self.libraries.set_filter(slot),
             Some(Choice::Debounce(ms)) => self.set_debounce(ms),
-            Some(Choice::Scale(scale)) => self.set_ui_scale(scale),
+            Some(Choice::Scale(scale)) => self.set_screen_size(scale),
             Some(Choice::Proton(slot)) => self.choose_proton(slot),
             None => {}
         }
@@ -1645,11 +1664,28 @@ impl eframe::App for App {
             self.cursor.take_press(),
             self.cursor.scroll_requested(),
         );
+        // Once the system scale is known (or given up on), settle the size on screen. The zoom
+        // then follows the system scale, so the size stays the same if that changes.
+        if self.window.see_system_scale(ctx.native_pixels_per_point()) && self.size_pending {
+            self.size_pending = false;
+            let (size, save) = window::initial_size(
+                self.settings.screen_scale,
+                self.settings.ui_scale,
+                self.deck_like,
+                self.window.system_scale(),
+            );
+            self.window.set_size(size);
+            if save {
+                self.remember_size(size);
+            }
+        }
         // Apply a requested zoom; otherwise notice egui's own Ctrl +/- zoom and remember it.
         if let Some(zoom) = self.window.take_zoom_request() {
             ctx.set_zoom_factor(zoom);
         } else if self.window.zoom_differs(ctx.zoom_factor()) {
-            self.set_ui_scale(ctx.zoom_factor());
+            let size = self.window.size_of_zoom(ctx.zoom_factor());
+            self.window.set_size(size);
+            self.remember_size(size);
         }
 
         let mut actions = Actions::default();
@@ -1660,7 +1696,7 @@ impl eframe::App for App {
         if self.infos.any_busy() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
-        let current_scale = self.window.scale();
+        let current_scale = self.window.size();
         let system_scale = ui.ctx().native_pixels_per_point();
         let mut blur_on = self.settings.blur_covers;
         egui::Panel::top("top").show(ui, |ui| {

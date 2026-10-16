@@ -10,12 +10,18 @@ pub const APP_DIR: &str = "dackel-launcher";
 const FILE: &str = "settings.json";
 const MIN_SCALE: f32 = 0.5;
 const MAX_SCALE: f32 = 3.0;
+const MAX_SIZE: f32 = 4.0;
 const MAX_DEBOUNCE_MS: u64 = 1000;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// UI zoom; `None` means "use the default for this kind of machine".
+    /// How big the UI looks on screen (the zoom times the system's scale); `None` means "use
+    /// the default for this machine".
+    pub screen_scale: Option<f32>,
+    /// The UI zoom older versions saved. It is turned into `screen_scale` once the system's
+    /// scale is known, and then dropped.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_scale: Option<f32>,
     /// Last fullscreen choice; `None` means "decide from the environment".
     pub fullscreen: Option<bool>,
@@ -39,6 +45,10 @@ pub fn load(path: &Path) -> Settings {
         .ui_scale
         .filter(|s| s.is_finite())
         .map(|s| s.clamp(MIN_SCALE, MAX_SCALE));
+    settings.screen_scale = settings
+        .screen_scale
+        .filter(|s| s.is_finite())
+        .map(|s| s.clamp(MIN_SCALE, MAX_SIZE));
     settings.debounce_ms = settings.debounce_ms.map(|ms| ms.min(MAX_DEBOUNCE_MS));
     settings
 }

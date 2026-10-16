@@ -112,9 +112,12 @@ mod scale {
 
         let l = list(Picker::Scale, &now);
 
-        assert_eq!(l.title, "UI scale");
-        assert_eq!(l.labels, ["0.50", "0.75", "1.00", "1.25", "1.50", "1.75"]);
-        assert_eq!(l.current, 4);
+        assert_eq!(l.title, "Size on screen");
+        assert_eq!(
+            l.labels,
+            ["0.75", "1.00", "1.25", "1.50", "1.75", "2.00", "2.50"]
+        );
+        assert_eq!(l.current, 3);
     }
 
     #[test]
@@ -125,7 +128,7 @@ mod scale {
             ..selection(&libs)
         };
 
-        assert_eq!(list(Picker::Scale, &now).current, 3);
+        assert_eq!(list(Picker::Scale, &now).current, 2);
     }
 
     #[test]
@@ -141,13 +144,13 @@ mod scale {
 
     #[test]
     fn picking_an_entry_chooses_that_scale() {
-        assert_eq!(pick(Picker::Scale, 0, 0), Some(Choice::Scale(0.5)));
-        assert_eq!(pick(Picker::Scale, 5, 0), Some(Choice::Scale(1.75)));
+        assert_eq!(pick(Picker::Scale, 0, 0), Some(Choice::Scale(0.75)));
+        assert_eq!(pick(Picker::Scale, 6, 0), Some(Choice::Scale(2.5)));
     }
 
     #[test]
     fn picking_past_the_end_changes_nothing() {
-        assert_eq!(pick(Picker::Scale, 6, 0), None);
+        assert_eq!(pick(Picker::Scale, 7, 0), None);
     }
 }
 
