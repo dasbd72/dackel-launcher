@@ -308,3 +308,66 @@ mod files {
         assert_eq!(fs::read(&path).unwrap(), b"\x42junk");
     }
 }
+
+mod launcher_entry {
+    use super::*;
+    use dackel_launcher::steam::{add_launcher, has_launcher};
+
+    #[test]
+    fn the_launcher_is_added_once_with_no_launch_options() {
+        let mut root = with_users_own();
+
+        let (id, created) = add_launcher(&mut root, &launcher());
+        let (again, created_again) = add_launcher(&mut root, &launcher());
+
+        assert!(created && !created_again);
+        assert_eq!(id, again);
+        let all = entries(&root);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0], &users_own());
+        assert_eq!(text(all[1], "AppName"), "Dackel Launcher");
+        assert_eq!(text(all[1], "Exe"), "\"/opt/dackel/dackel-launcher\"");
+        assert_eq!(text(all[1], "LaunchOptions"), "");
+        assert!(has_launcher(&root, &launcher()));
+    }
+
+    #[test]
+    fn a_shortcut_the_user_made_for_the_launcher_counts_as_added() {
+        let mut root = new_shortcuts();
+        if let Some(Value::Map(items)) = root.get_mut("shortcuts") {
+            items.push((
+                "0".into(),
+                Value::Map(vec![
+                    ("appid".into(), Value::U32(0x8000_1234)),
+                    ("AppName".into(), Value::Str("Dackel".into())),
+                    (
+                        "Exe".into(),
+                        Value::Str("\"/opt/dackel/dackel-launcher\"".into()),
+                    ),
+                    ("LaunchOptions".into(), Value::Str("".into())),
+                ]),
+            ));
+        }
+
+        let (id, created) = add_launcher(&mut root, &launcher());
+
+        assert!(!created);
+        assert_eq!(id, 0x8000_1234);
+        assert_eq!(entries(&root).len(), 1);
+    }
+
+    #[test]
+    fn a_game_entry_is_not_the_launcher_and_the_launcher_is_not_a_game() {
+        let mut root = new_shortcuts();
+        add_game(&mut root, &launcher(), Path::new("/games/RJ1"), "One").unwrap();
+
+        assert!(!has_launcher(&root, &launcher()));
+        let (_, created) = add_launcher(&mut root, &launcher());
+        assert!(created);
+        assert!(remove_game(&mut root, Path::new("/games/RJ1")));
+        assert!(
+            has_launcher(&root, &launcher()),
+            "removing a game leaves the launcher"
+        );
+    }
+}

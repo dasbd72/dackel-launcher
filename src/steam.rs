@@ -79,6 +79,30 @@ fn set(entry: &mut Value, key: &str, value: Value) {
     }
 }
 
+fn new_entry(id: u32, name: &str, exe: &str, start: &str, options: &str) -> Value {
+    let text = |s: &str| Value::Str(s.to_owned());
+    Value::Map(vec![
+        ("appid".to_owned(), Value::U32(id)),
+        ("AppName".to_owned(), text(name)),
+        ("Exe".to_owned(), text(exe)),
+        ("StartDir".to_owned(), text(start)),
+        ("icon".to_owned(), text("")),
+        ("ShortcutPath".to_owned(), text("")),
+        ("LaunchOptions".to_owned(), text(options)),
+        ("IsHidden".to_owned(), Value::U32(0)),
+        ("AllowDesktopConfig".to_owned(), Value::U32(1)),
+        ("AllowOverlay".to_owned(), Value::U32(1)),
+        ("OpenVR".to_owned(), Value::U32(0)),
+        ("Devkit".to_owned(), Value::U32(0)),
+        ("DevkitGameID".to_owned(), text("")),
+        ("DevkitOverrideAppID".to_owned(), Value::U32(0)),
+        ("LastPlayTime".to_owned(), Value::U32(0)),
+        ("FlatpakAppID".to_owned(), text("")),
+        ("sortas".to_owned(), text("")),
+        ("tags".to_owned(), Value::Map(Vec::new())),
+    ])
+}
+
 /// Adds the entry for a game, or updates it when the game already has one (its app id and
 /// its artwork stay). Returns the entry's app id.
 pub fn add_game(
@@ -104,7 +128,6 @@ pub fn add_game(
         };
     }
     let id = shortcut_app_id(&exe, name);
-    let text = |s: &str| Value::Str(s.to_owned());
     let next = list
         .iter()
         .filter_map(|(k, _)| k.parse::<usize>().ok())
@@ -112,28 +135,48 @@ pub fn add_game(
         .map_or(0, |n| n + 1);
     list.push((
         next.to_string(),
-        Value::Map(vec![
-            ("appid".to_owned(), Value::U32(id)),
-            ("AppName".to_owned(), text(name)),
-            ("Exe".to_owned(), Value::Str(exe)),
-            ("StartDir".to_owned(), Value::Str(start)),
-            ("icon".to_owned(), text("")),
-            ("ShortcutPath".to_owned(), text("")),
-            ("LaunchOptions".to_owned(), Value::Str(options)),
-            ("IsHidden".to_owned(), Value::U32(0)),
-            ("AllowDesktopConfig".to_owned(), Value::U32(1)),
-            ("AllowOverlay".to_owned(), Value::U32(1)),
-            ("OpenVR".to_owned(), Value::U32(0)),
-            ("Devkit".to_owned(), Value::U32(0)),
-            ("DevkitGameID".to_owned(), text("")),
-            ("DevkitOverrideAppID".to_owned(), Value::U32(0)),
-            ("LastPlayTime".to_owned(), Value::U32(0)),
-            ("FlatpakAppID".to_owned(), text("")),
-            ("sortas".to_owned(), text("")),
-            ("tags".to_owned(), Value::Map(Vec::new())),
-        ]),
+        new_entry(id, name, &exe, &start, &options),
     ));
     Ok(id)
+}
+
+fn is_launcher_entry(entry: &Value, quoted_exe: &str) -> bool {
+    entry.get("Exe").and_then(Value::as_str) == Some(quoted_exe)
+        && entry.get("LaunchOptions").and_then(Value::as_str) == Some("")
+}
+
+/// Whether Steam already has a shortcut that starts the launcher itself.
+pub fn has_launcher(root: &Value, launcher: &Path) -> bool {
+    let exe = quoted(launcher);
+    root.get("shortcuts")
+        .is_some_and(|s| s.items().iter().any(|(_, e)| is_launcher_entry(e, &exe)))
+}
+
+/// Adds a shortcut that starts the launcher, unless one exists (even one the user made).
+/// Returns its app id and whether it was created.
+pub fn add_launcher(root: &mut Value, launcher: &Path) -> (u32, bool) {
+    let exe = quoted(launcher);
+    let list = list_mut(root);
+    if let Some(id) = list
+        .iter()
+        .find(|(_, e)| is_launcher_entry(e, &exe))
+        .and_then(|(_, e)| match e.get("appid") {
+            Some(Value::U32(id)) => Some(*id),
+            _ => None,
+        })
+    {
+        return (id, false);
+    }
+    let name = "Dackel Launcher";
+    let id = shortcut_app_id(&exe, name);
+    let next = list
+        .iter()
+        .filter_map(|(k, _)| k.parse::<usize>().ok())
+        .max()
+        .map_or(0, |n| n + 1);
+    let start = quoted(launcher.parent().unwrap_or(Path::new("/")));
+    list.push((next.to_string(), new_entry(id, name, &exe, &start, "")));
+    (id, true)
 }
 
 /// The app id of a game's entry, if it has one.

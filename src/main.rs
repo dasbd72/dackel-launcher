@@ -257,6 +257,8 @@ struct App {
     steam_root: Option<PathBuf>,
     /// Whether the game on the details page has a Steam entry (game folder, answer).
     steam_cache: std::cell::RefCell<Option<(PathBuf, bool)>>,
+    /// Whether Steam has a shortcut that starts the launcher itself.
+    launcher_cache: std::cell::Cell<Option<bool>>,
     /// A text box of the Libraries window has the keyboard; the pad's B and up/down leave it.
     library_typing: bool,
     /// Leave that text box at the next draw.
@@ -305,6 +307,7 @@ impl App {
             steam_root: std::env::var_os("HOME")
                 .and_then(|home| steam::steam_root(Path::new(&home))),
             steam_cache: std::cell::RefCell::new(None),
+            launcher_cache: std::cell::Cell::new(None),
             library_typing: false,
             library_leave: false,
             browser: FileDialog::new()
@@ -705,6 +708,55 @@ impl App {
         Some(has)
     }
 
+    /// The account's shortcuts file to change, with its Steam folder and account name.
+    fn steam_shortcuts(&self) -> Result<(PathBuf, PathBuf, String), String> {
+        let root = self.steam_root.clone().ok_or("Steam was not found")?;
+        let account = steam::account_with_newest(&steam::accounts(&root))
+            .ok_or("no Steam account was found")?;
+        let path = steam::shortcuts_path(&root, &account);
+        Ok((root, path, account))
+    }
+
+    /// Whether Steam has a shortcut for the launcher; `None` when Steam was not found.
+    fn launcher_in_steam(&self) -> Option<bool> {
+        self.steam_root.as_ref()?;
+        if let Some(known) = self.launcher_cache.get() {
+            return Some(known);
+        }
+        let has = std::env::current_exe().is_ok_and(|launcher| {
+            self.steam_shortcuts()
+                .and_then(|(_, path, _)| steam::load_shortcuts(&path))
+                .is_ok_and(|shortcuts| steam::has_launcher(&shortcuts, &launcher))
+        });
+        self.launcher_cache.set(Some(has));
+        Some(has)
+    }
+
+    /// Adds a shortcut that starts the launcher itself, and says what happened.
+    fn add_launcher_to_steam(&mut self) {
+        self.launcher_cache.set(None);
+        let done = (|| {
+            let (_, path, account) = self.steam_shortcuts()?;
+            let mut shortcuts = steam::load_shortcuts(&path)?;
+            let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
+            let (_, created) = steam::add_launcher(&mut shortcuts, &launcher);
+            if !created {
+                return Ok("Dackel Launcher is already in Steam".to_owned());
+            }
+            steam::save_shortcuts(&path, &shortcuts)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            let restart = if steam::steam_running(Path::new("/proc")) {
+                "; restart Steam to see it"
+            } else {
+                ""
+            };
+            Ok::<_, String>(format!(
+                "Added Dackel Launcher to Steam (account {account}){restart}"
+            ))
+        })();
+        self.message = Some(done.unwrap_or_else(|err| format!("Steam: {err}")));
+    }
+
     /// Adds the game to Steam, or takes it out, and says what happened.
     fn set_steam_entry(&mut self, request: SteamRequest) {
         self.steam_cache.replace(None);
@@ -715,10 +767,7 @@ impl App {
     }
 
     fn write_steam_entry(&self, request: &SteamRequest) -> Result<String, String> {
-        let root = self.steam_root.as_ref().ok_or("Steam was not found")?;
-        let account = steam::account_with_newest(&steam::accounts(root))
-            .ok_or("no Steam account was found")?;
-        let path = steam::shortcuts_path(root, &account);
+        let (root, path, account) = self.steam_shortcuts()?;
         let mut shortcuts = steam::load_shortcuts(&path)?;
         let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
         let mut note = String::new();
@@ -726,7 +775,8 @@ impl App {
             let app_id = steam::add_game(&mut shortcuts, &launcher, &request.dir, &request.title)?;
             steam::refresh_launcher(&mut shortcuts, &launcher);
             if let Some(cover) = &request.cover
-                && let Err(err) = steam::write_grid(cover, &steam::grid_dir(root, &account), app_id)
+                && let Err(err) =
+                    steam::write_grid(cover, &steam::grid_dir(&root, &account), app_id)
             {
                 note = format!(" (no cover image: {err})");
             }
@@ -1598,6 +1648,7 @@ impl eframe::App for App {
         let mut actions = Actions::default();
         let mut tuning_action: Option<TuningResult> = None;
         let mut steam_request: Option<SteamRequest> = None;
+        let mut add_launcher = false;
         self.collect_reloads();
         if self.infos.any_busy() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
@@ -1614,6 +1665,12 @@ impl eframe::App for App {
                 let response = ui.button("Libraries");
                 if frame.pressed(ui, Control::Libraries, &response, true) {
                     self.popup = Some(Popup::Libraries);
+                }
+                if self.launcher_in_steam() == Some(false) {
+                    let response = ui.button("Add to Steam");
+                    if frame.pressed(ui, Control::AddLauncherToSteam, &response, true) {
+                        add_launcher = true;
+                    }
                 }
                 let response = ui.button("Fullscreen");
                 actions.fullscreen = frame.pressed(ui, Control::Fullscreen, &response, true);
@@ -1976,6 +2033,9 @@ impl eframe::App for App {
         }
         if let Some(request) = steam_request {
             self.set_steam_entry(request);
+        }
+        if add_launcher {
+            self.add_launcher_to_steam();
         }
 
         self.cursor.end_frame(

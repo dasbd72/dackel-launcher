@@ -16,3 +16,7 @@ The details page of a game has **Add to Steam** / **Remove from Steam** when Ste
 - **Steam running:** the file is still written, but Steam may overwrite it when it exits.
   Restart Steam to see the entry, and add entries with Steam closed to be safe.
 - **Moving the launcher:** adding any entry rewrites the program path of all our entries.
+
+- **The launcher itself:** an **Add to Steam** button in the toolbar adds a shortcut that starts
+  the launcher, unless Steam already has one for it (including one made by hand); then the button
+  is hidden.

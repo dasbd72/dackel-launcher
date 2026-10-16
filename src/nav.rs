@@ -62,6 +62,8 @@ pub enum Control {
     // Toolbar.
     Rescan,
     Libraries,
+    /// Adds the launcher itself to Steam.
+    AddLauncherToSteam,
     /// On the empty-state page, opens the Libraries window.
     AddLibrary,
     /// On the empty-state page, creates the missing library folder.
