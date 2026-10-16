@@ -619,13 +619,11 @@ impl App {
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
         };
         if prompt.choosing {
-            return proton::installed(&proton::compat_dir())
+            let compat = proton::compat_dir();
+            return proton::selectable(&compat)
                 .unwrap_or_default()
                 .into_iter()
-                .map(|p| {
-                    let label = name(&p);
-                    (PromptOption::Version(p), label)
-                })
+                .map(|label| (PromptOption::Version(compat.join(&label)), label))
                 .collect();
         }
         let newest = match &prompt.newest {
@@ -817,13 +815,13 @@ impl App {
         self.save_settings();
     }
 
-    /// Saves the Launch options form, unpins Proton, or resets the prefix.
+    /// Saves the Launch options form, saves the Proton choice, or resets the prefix.
     fn apply_tuning(&mut self, result: TuningResult) {
         let TuningResult {
             dir,
             id,
             save,
-            unpin,
+            set_proton,
             reset_prefix: reset,
         } = result;
         if let Some((env, args)) = save {
@@ -832,10 +830,13 @@ impl App {
                 Err(err) => format!("Could not save launch options: {err}"),
             });
         }
-        if unpin {
-            self.message = Some(match profile::set_proton_pin(&dir, None) {
-                Ok(()) => format!("{id} will pin the Proton it launches with next"),
-                Err(err) => format!("Could not unpin Proton: {err}"),
+        if let Some(version) = set_proton {
+            self.message = Some(match profile::set_proton_pin(&dir, version.as_deref()) {
+                Ok(()) => match version {
+                    Some(v) => format!("{id} will launch with {v}"),
+                    None => format!("{id} will use the newest Proton"),
+                },
+                Err(err) => format!("Could not save the Proton choice: {err}"),
             });
         }
         if reset {
@@ -1640,7 +1641,7 @@ impl eframe::App for App {
                     dir: entry.game.dir.clone(),
                     id: entry.game.id.clone(),
                     save: action.save_tuning,
-                    unpin: action.unpin_proton,
+                    set_proton: action.set_proton,
                     reset_prefix: action.reset_prefix,
                 });
                 actions.back = action.back;
@@ -2078,6 +2079,6 @@ struct TuningResult {
     dir: PathBuf,
     id: String,
     save: Option<(std::collections::BTreeMap<String, String>, String)>,
-    unpin: bool,
+    set_proton: Option<Option<String>>,
     reset_prefix: bool,
 }

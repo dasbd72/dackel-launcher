@@ -190,11 +190,6 @@ impl<S: Spawner> Launcher<S> {
             process,
         });
         profile::record_launch(game_dir, now)?;
-        // The first launch pins the Proton version, so another machine can notice a mismatch.
-        // A pin that cannot be saved must not make a launch that worked look like a failure.
-        if let (None, Some(version)) = (&tuning.proton, proton.and_then(Path::file_name)) {
-            let _ = profile::set_proton_pin(game_dir, Some(&version.to_string_lossy()));
-        }
         Ok(())
     }
 

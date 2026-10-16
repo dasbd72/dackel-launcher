@@ -9,6 +9,7 @@ use dackel_launcher::info::GameInfo;
 use dackel_launcher::library::store_of;
 use dackel_launcher::nav::Control;
 use dackel_launcher::profile::{self, Stats};
+use dackel_launcher::proton;
 use dackel_launcher::tuning::{format_env, parse_env, split_args, winetricks_command};
 use eframe::egui;
 use std::collections::BTreeMap;
@@ -33,6 +34,8 @@ pub struct TuningEdit {
     args: String,
     error: Option<String>,
     confirm_reset: bool,
+    /// Proton versions installed here, for the per-game choice.
+    proton_versions: Vec<String>,
 }
 
 impl TuningEdit {
@@ -44,6 +47,7 @@ impl TuningEdit {
             args: tuning.args,
             error: None,
             confirm_reset: false,
+            proton_versions: proton::selectable(&proton::compat_dir()).unwrap_or_default(),
         }
     }
 }
@@ -81,7 +85,8 @@ pub struct DetailsAction {
     pub choose_exe: Option<PathBuf>,
     /// Env and arguments to save.
     pub save_tuning: Option<(BTreeMap<String, String>, String)>,
-    pub unpin_proton: bool,
+    /// A Proton choice to save: `Some(None)` is Automatic.
+    pub set_proton: Option<Option<String>>,
     pub reset_prefix: bool,
 }
 
@@ -348,6 +353,41 @@ pub fn details_ui(
     action
 }
 
+/// The Proton dropdown: Automatic or one installed version, saved as soon as it is picked.
+/// A pin that is not installed here is still listed, marked as such, so it stays visible.
+fn proton_choice(
+    ui: &mut egui::Ui,
+    pin: Option<&str>,
+    installed: &[String],
+    action: &mut DetailsAction,
+) {
+    const AUTOMATIC: &str = "Automatic (newest GE)";
+    let current = match pin {
+        None => AUTOMATIC.to_owned(),
+        Some(pin) if installed.iter().any(|v| v == pin) => pin.to_owned(),
+        Some(pin) => format!("{pin} (not installed)"),
+    };
+    ui.horizontal(|ui| {
+        ui.label("Proton");
+        egui::ComboBox::from_id_salt("proton-choice")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(pin.is_none(), AUTOMATIC).clicked() && pin.is_some() {
+                    action.set_proton = Some(None);
+                }
+                for version in installed {
+                    let on = pin == Some(version.as_str());
+                    if ui.selectable_label(on, version).clicked() && !on {
+                        action.set_proton = Some(Some(version.clone()));
+                    }
+                }
+            });
+    });
+    if installed.is_empty() {
+        ui.weak("No Proton found in compatibilitytools.d");
+    }
+}
+
 /// Per-game env and arguments, the pinned Proton, the winetricks command and Prefix reset.
 fn launch_options(
     ui: &mut egui::Ui,
@@ -390,17 +430,7 @@ fn launch_options(
         });
 
         ui.separator();
-        ui.horizontal(|ui| match view.proton_pin {
-            Some(pin) => {
-                ui.label(format!("Proton pinned to {pin}"));
-                if ui.button("Unpin").clicked() {
-                    action.unpin_proton = true;
-                }
-            }
-            None => {
-                ui.weak("Proton: pinned on the first launch");
-            }
-        });
+        proton_choice(ui, view.proton_pin, &edit.proton_versions, action);
 
         ui.separator();
         ui.weak("Winetricks for this game's prefix");

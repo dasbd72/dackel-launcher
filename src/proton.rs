@@ -96,15 +96,24 @@ pub enum ProtonChoice {
     },
 }
 
-/// Like `resolve`, but honoring the game's pinned version. An explicit per-machine choice
-/// (override file or `$PROTONPATH`) wins without a warning; otherwise an installed pin is
-/// used even if newer versions exist, and a missing pin is reported as a mismatch.
+/// Like `resolve`, but honoring the game's pinned version, whether chosen or pinned on the
+/// first launch. An installed pin wins over the per-machine choice (override file or
+/// `$PROTONPATH`), which applies when there is no pin or it is not installed; a missing pin
+/// with no machine choice is reported as a mismatch.
 pub fn resolve_for_game(
     config_file: &Path,
     env_protonpath: Option<&Path>,
     compat_dir: &Path,
     pinned: Option<&str>,
 ) -> io::Result<ProtonChoice> {
+    // A pin comes from a profile that may have been shared: only a plain folder name counts.
+    let installed_pin = pinned.filter(|pin| is_plain_name(pin)).and_then(|pin| {
+        let wanted = compat_dir.join(pin);
+        wanted.is_dir().then_some(wanted)
+    });
+    if let Some(path) = installed_pin {
+        return Ok(ProtonChoice::Use(Some(path)));
+    }
     if let Some(path) = read_override(config_file)? {
         return Ok(ProtonChoice::Use(Some(path)));
     }
@@ -112,25 +121,40 @@ pub fn resolve_for_game(
         return Ok(ProtonChoice::Use(Some(path.to_path_buf())));
     }
     let newest = newest_installed(compat_dir)?;
-    let Some(pinned) = pinned else {
-        return Ok(ProtonChoice::Use(newest));
-    };
-    // A pin comes from a profile that may have been shared: only a plain folder name counts.
-    let wanted = compat_dir.join(pinned);
-    let plain = matches!(
-        Path::new(pinned)
-            .components()
-            .collect::<Vec<_>>()
-            .as_slice(),
-        [std::path::Component::Normal(_)]
-    );
-    if plain && wanted.is_dir() {
-        return Ok(ProtonChoice::Use(Some(wanted)));
-    }
-    Ok(ProtonChoice::Mismatch {
-        pinned: pinned.to_owned(),
-        newest,
+    Ok(match pinned {
+        Some(pinned) => ProtonChoice::Mismatch {
+            pinned: pinned.to_owned(),
+            newest,
+        },
+        None => ProtonChoice::Use(newest),
     })
+}
+
+fn is_plain_name(name: &str) -> bool {
+    matches!(
+        Path::new(name).components().collect::<Vec<_>>().as_slice(),
+        [std::path::Component::Normal(_)]
+    )
+}
+
+/// Every Proton the user can pick for a game: the folders under `compat_dir` that hold a
+/// `proton` script, newest first. Names only, as the pin stores them.
+pub fn selectable(compat_dir: &Path) -> io::Result<Vec<String>> {
+    let entries = match std::fs::read_dir(compat_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if entry.path().join("proton").is_file() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            found.push((version_key(&name), name));
+        }
+    }
+    found.sort_by(|a, b| b.cmp(a));
+    Ok(found.into_iter().map(|(_, name)| name).collect())
 }
 
 /// Installed `GE-Proton*` versions under `compat_dir`, newest first.

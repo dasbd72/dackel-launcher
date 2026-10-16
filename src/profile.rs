@@ -31,7 +31,7 @@ struct Profile {
     /// Extra command-line arguments, as the user typed them.
     #[serde(default)]
     args: String,
-    /// Name of the Proton version the game was first launched with (e.g. `GE-Proton9-27`).
+    /// Name of the Proton version chosen for the game (e.g. `GE-Proton9-27`); none means automatic.
     #[serde(default)]
     proton: Option<String>,
 }
@@ -41,7 +41,7 @@ struct Profile {
 pub struct Tuning {
     pub env: BTreeMap<String, String>,
     pub args: String,
-    /// The pinned Proton version; `None` until the first launch.
+    /// The Proton version chosen for the game; `None` follows the newest install.
     pub proton: Option<String>,
 }
 

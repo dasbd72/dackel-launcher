@@ -1,6 +1,6 @@
 use dackel_launcher::launch::{LaunchPlan, Launcher, Process, Spawner, plan_with};
 use dackel_launcher::profile::{self, ExeState, Tuning, read_tuning, set_proton_pin, set_tuning};
-use dackel_launcher::proton::{ProtonChoice, installed, resolve_for_game};
+use dackel_launcher::proton::{ProtonChoice, installed, resolve_for_game, selectable};
 use dackel_launcher::tuning::{
     format_env, parse_env, prefix_dir, reset_prefix, split_args, winetricks_command,
 };
@@ -257,7 +257,7 @@ mod launching {
     }
 
     #[test]
-    fn the_first_launch_pins_the_proton_version_used() {
+    fn a_launch_without_a_choice_pins_nothing() {
         let game = game();
         let mut launcher = Launcher::new(Fake::default());
 
@@ -270,10 +270,7 @@ mod launching {
             )
             .unwrap();
 
-        assert_eq!(
-            read_tuning(game.path()).unwrap().proton.as_deref(),
-            Some("GE-Proton9-27")
-        );
+        assert_eq!(read_tuning(game.path()).unwrap().proton, None);
     }
 
     #[test]
@@ -398,6 +395,46 @@ mod proton_pin {
             choice,
             ProtonChoice::Use(Some(PathBuf::from("/opt/GE-Proton8-1")))
         );
+    }
+
+    #[test]
+    fn an_installed_pin_beats_the_machine_choice() {
+        let compat = compat_with(&["GE-Proton9-27"]);
+        let config = compat.path().join("proton-path");
+        fs::write(&config, "/opt/GE-Proton8-1\n").unwrap();
+
+        let choice = resolve_for_game(&config, None, compat.path(), Some("GE-Proton9-27")).unwrap();
+
+        assert_eq!(
+            choice,
+            ProtonChoice::Use(Some(compat.path().join("GE-Proton9-27")))
+        );
+    }
+
+    #[test]
+    fn selectable_versions_are_every_folder_with_a_proton_script_newest_first() {
+        let compat = compat_with(&[
+            "GE-Proton9-27",
+            "GE-Proton10-1",
+            "Proton-CachyOS-10",
+            "NoScript",
+        ]);
+        for d in ["GE-Proton9-27", "GE-Proton10-1", "Proton-CachyOS-10"] {
+            fs::write(compat.path().join(d).join("proton"), "#!/bin/sh\n").unwrap();
+        }
+        fs::write(compat.path().join("a-file"), "x").unwrap();
+
+        assert_eq!(
+            selectable(compat.path()).unwrap(),
+            ["GE-Proton10-1", "Proton-CachyOS-10", "GE-Proton9-27"]
+        );
+    }
+
+    #[test]
+    fn nothing_is_selectable_without_a_compat_folder() {
+        let root = tempfile::tempdir().unwrap();
+
+        assert!(selectable(&root.path().join("missing")).unwrap().is_empty());
     }
 
     #[test]
