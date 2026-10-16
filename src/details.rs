@@ -12,7 +12,8 @@ use dackel_launcher::pickers::AUTOMATIC_PROTON;
 use dackel_launcher::profile::{self, Stats};
 use dackel_launcher::proton;
 use dackel_launcher::steam_art::IconSource;
-use dackel_launcher::tuning::{format_env, parse_env, split_args, winetricks_command};
+use dackel_launcher::tuning::{format_env, parse_env, split_args};
+use dackel_launcher::winetricks::{COMMON, parse_verbs, toggle_verb};
 use eframe::egui;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -32,9 +33,16 @@ fn row_label(ui: &mut egui::Ui, text: &str) {
 pub struct TuningEdit {
     /// `Game::key` of the game the text belongs to.
     pub key: String,
+    /// The game's folder.
+    pub dir: PathBuf,
     env_text: String,
     args: String,
     error: Option<String>,
+    /// The verbs typed (or picked) to install into the prefix.
+    verbs_text: String,
+    install_error: Option<String>,
+    /// Verbs already installed into this game's prefix.
+    pub installed: Vec<String>,
     confirm_reset: bool,
     /// Proton versions installed here, for the per-game choice.
     pub proton_versions: Vec<String>,
@@ -58,9 +66,13 @@ impl TuningEdit {
         let tuning = profile::read_tuning(game_dir).unwrap_or_default();
         TuningEdit {
             key,
+            dir: game_dir.to_path_buf(),
             env_text: format_env(&tuning.env),
             args: tuning.args,
             error: None,
+            verbs_text: String::new(),
+            install_error: None,
+            installed: profile::read_winetricks(game_dir).unwrap_or_default(),
             confirm_reset: false,
             proton_versions: proton::selectable(&proton::compat_dir()).unwrap_or_default(),
             pin: tuning.proton,
@@ -89,8 +101,8 @@ pub struct DetailsView<'a> {
     pub running: bool,
     /// Set while this game is being extracted in the background.
     pub extracting: Option<Progress>,
-    /// The game's folder, for the winetricks command.
-    pub dir: &'a Path,
+    /// Winetricks verbs are being installed into this game's prefix.
+    pub installing: bool,
     /// Whether the game has an entry in Steam; `None` when Steam was not found.
     pub steam_entry: Option<bool>,
 }
@@ -122,6 +134,8 @@ pub struct DetailsAction {
     /// Move controller focus here (the reset prompt came or went).
     pub focus: Option<Control>,
     pub reset_prefix: bool,
+    /// Winetricks verbs to install into the prefix.
+    pub install: Option<Vec<String>>,
     pub steam: Option<SteamChange>,
 }
 
@@ -471,6 +485,71 @@ fn form_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
     )
 }
 
+/// Install winetricks verbs into the game's prefix: common ones as chips, anything else typed.
+fn winetricks_section(
+    ui: &mut egui::Ui,
+    view: &DetailsView,
+    frame: &mut FocusFrame,
+    edit: &mut TuningEdit,
+    action: &mut DetailsAction,
+) -> egui::Response {
+    ui.weak("Install into this game's prefix (winetricks)");
+    ui.horizontal_wrapped(|ui| {
+        for (i, choice) in COMMON.iter().enumerate() {
+            let on = edit.verbs_text.split_whitespace().any(|w| w == choice.verb);
+            let done = edit.installed.iter().any(|v| v == choice.verb);
+            let label = if done {
+                format!("{} (installed)", choice.verb)
+            } else {
+                choice.verb.to_owned()
+            };
+            let chip = ui
+                .add(egui::Button::new(label).selected(on))
+                .on_hover_text(choice.hint);
+            if frame.pressed(ui, Control::WinetricksVerb(i), &chip, true) {
+                edit.verbs_text = toggle_verb(&edit.verbs_text, choice.verb);
+                edit.install_error = None;
+            }
+        }
+    });
+    let ready = !view.running && !view.installing && !edit.proton_versions.is_empty();
+    let typed = ui
+        .horizontal(|ui| {
+            let typed = text_box(
+                ui,
+                frame,
+                Control::WinetricksBox,
+                egui::TextEdit::singleline(&mut edit.verbs_text)
+                    .hint_text("verbs, e.g. dotnet48 win7")
+                    .desired_width(FORM_WIDTH),
+            );
+            let install = form_button(ui, "Install", ready);
+            if frame.pressed(ui, Control::WinetricksInstall, &install, ready) {
+                match parse_verbs(&edit.verbs_text) {
+                    Ok(verbs) => {
+                        edit.install_error = None;
+                        action.install = Some(verbs);
+                    }
+                    Err(err) => edit.install_error = Some(err),
+                }
+            }
+            typed
+        })
+        .inner;
+    if let Some(err) = &edit.install_error {
+        ui.colored_label(egui::Color32::LIGHT_RED, err);
+    }
+    if view.installing {
+        ui.weak("Installing... this can take several minutes");
+    } else if view.running {
+        ui.weak("Close the game first.");
+    }
+    if !edit.installed.is_empty() {
+        ui.weak(format!("Installed: {}", edit.installed.join(", ")));
+    }
+    typed
+}
+
 /// A text box the controller can focus: A starts typing in it, and the page's B or
 /// up/down leave it again (see `TuningEdit::leave`).
 pub fn text_box(
@@ -487,7 +566,7 @@ pub fn text_box(
     response
 }
 
-/// Per-game env and arguments, the Proton choice, the winetricks command and Prefix reset.
+/// Per-game env and arguments, the Proton choice, winetricks installs and Prefix reset.
 /// Everything in it can be focused with the controller.
 fn launch_options(
     ui: &mut egui::Ui,
@@ -516,12 +595,6 @@ fn launch_options(
                 Control::ArgsBox,
                 egui::TextEdit::singleline(&mut edit.args).desired_width(FORM_WIDTH),
             );
-            edit.typing = env.has_focus() || args.has_focus();
-            if std::mem::take(&mut edit.leave) {
-                env.surrender_focus();
-                args.surrender_focus();
-                edit.typing = false;
-            }
             ui.horizontal(|ui| {
                 let save = form_button(ui, "Save", true);
                 if frame.pressed(ui, Control::SaveTuning, &save, true) {
@@ -556,12 +629,13 @@ fn launch_options(
             );
 
             ui.separator();
-            ui.weak("Winetricks for this game's prefix");
-            let command = winetricks_command(view.dir);
-            ui.label(egui::RichText::new(&command).monospace());
-            let copy = form_button(ui, "Copy", true);
-            if frame.pressed(ui, Control::CopyWinetricks, &copy, true) {
-                ui.ctx().copy_text(command.clone());
+            let verbs = winetricks_section(ui, view, frame, edit, action);
+            edit.typing = env.has_focus() || args.has_focus() || verbs.has_focus();
+            if std::mem::take(&mut edit.leave) {
+                env.surrender_focus();
+                args.surrender_focus();
+                verbs.surrender_focus();
+                edit.typing = false;
             }
 
             ui.separator();
@@ -633,7 +707,7 @@ mod tests {
             busy: false,
             running: false,
             extracting: None,
-            dir: &dir,
+            installing: false,
             steam_entry: None,
         };
         let ctx = egui::Context::default();
@@ -669,7 +743,8 @@ mod tests {
             Control::ArgsBox,
             Control::SaveTuning,
             Control::ProtonChoice,
-            Control::CopyWinetricks,
+            Control::WinetricksVerb(1),
+            Control::WinetricksBox,
             Control::ResetPrefix,
         ];
         for pair in chain.windows(2) {
@@ -688,5 +763,12 @@ mod tests {
                 pair[1]
             );
         }
+        let right = spatial_next(&rects, at(Control::WinetricksBox), Dir::Right);
+        assert_eq!(
+            items[right].target,
+            Target::Control(Control::WinetricksInstall)
+        );
+        let left = spatial_next(&rects, at(Control::WinetricksInstall), Dir::Left);
+        assert_eq!(items[left].target, Target::Control(Control::WinetricksBox));
     }
 }

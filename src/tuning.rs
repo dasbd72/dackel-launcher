@@ -125,20 +125,12 @@ pub fn prefix_dir(game_dir: &Path) -> PathBuf {
 }
 
 /// Deletes this game's Wine prefix (and nothing else); a game without one is fine.
-/// Tuning, play time and the game's files are untouched.
+/// The record of installed winetricks verbs goes with it; tuning, play time and the game's
+/// files are untouched.
 pub fn reset_prefix(game_dir: &Path) -> io::Result<()> {
     match std::fs::remove_dir_all(prefix_dir(game_dir)) {
-        Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
-        _ => Ok(()),
+        Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+        _ => {}
     }
-}
-
-/// A shell command that runs winetricks against the game's prefix.
-pub fn winetricks_command(game_dir: &Path) -> String {
-    let prefix = prefix_dir(game_dir).display().to_string();
-    format!("WINEPREFIX={} winetricks", shell_quote(&prefix))
-}
-
-fn shell_quote(text: &str) -> String {
-    format!("'{}'", text.replace('\'', r"'\''"))
+    crate::profile::clear_winetricks(game_dir)
 }

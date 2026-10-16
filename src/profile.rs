@@ -38,6 +38,9 @@ struct Profile {
     /// Name of the Proton version chosen for the game (e.g. `GE-Proton9-27`); none means automatic.
     #[serde(default)]
     proton: Option<String>,
+    /// Winetricks verbs installed into the game's prefix, in the order they succeeded.
+    #[serde(default)]
+    winetricks: Vec<String>,
 }
 
 /// Per-game launch tuning kept in the profile.
@@ -77,6 +80,31 @@ pub fn set_steam_icon(game_dir: &Path, icon: IconSource) -> io::Result<()> {
 /// Pins (or, with `None`, unpins) the Proton version for this game.
 pub fn set_proton_pin(game_dir: &Path, version: Option<&str>) -> io::Result<()> {
     update_profile(game_dir, |p| p.proton = version.map(str::to_owned))
+}
+
+/// The winetricks verbs installed into this game's prefix so far.
+pub fn read_winetricks(game_dir: &Path) -> io::Result<Vec<String>> {
+    Ok(read_profile(game_dir)?.unwrap_or_default().winetricks)
+}
+
+/// Records verbs that installed; one already listed keeps its place.
+pub fn add_winetricks(game_dir: &Path, verbs: &[String]) -> io::Result<()> {
+    update_profile(game_dir, |p| {
+        for verb in verbs {
+            if !p.winetricks.contains(verb) {
+                p.winetricks.push(verb.clone());
+            }
+        }
+    })
+}
+
+/// Forgets the installed verbs, as the prefix they went into is gone. A game with nothing
+/// recorded is left alone (no profile is created).
+pub fn clear_winetricks(game_dir: &Path) -> io::Result<()> {
+    match read_profile(game_dir)? {
+        Some(p) if !p.winetricks.is_empty() => update_profile(game_dir, |p| p.winetricks.clear()),
+        _ => Ok(()),
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

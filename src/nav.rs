@@ -101,7 +101,10 @@ pub enum Control {
     ArgsBox,
     SaveTuning,
     ProtonChoice,
-    CopyWinetricks,
+    /// A common winetricks verb chip, by its slot in `winetricks::COMMON`.
+    WinetricksVerb(usize),
+    WinetricksBox,
+    WinetricksInstall,
     ResetPrefix,
     DeletePrefix,
     KeepPrefix,

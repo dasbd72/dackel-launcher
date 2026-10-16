@@ -24,6 +24,14 @@ Set in `launch::plan_with`; the game's own Env wins.
 | `LANG` / `LC_ALL=ja_JP.UTF-8` | Japanese games | a game wants another locale |
 | `GAMEID=umu-<RJ code>` | one protonfixes id per game | never |
 
+## Winetricks installs (per game, on request)
+
+Launch options has an "Install into this game's prefix" section: six one-click verbs
+(`winetricks::COMMON`) and a box for any other verbs. Install runs
+`umu-run winetricks -q <verbs>` in the background with the game's Proton and env, logs to
+`.dackel-launcher/winetricks.log`, and records the verbs that succeeded in the profile. Reset
+prefix clears the list. It is refused while the game runs or another install is going.
+
 ## Tried, not adopted
 
 - `PROTON_ENABLE_WAYLAND=0`: no effect on GE-Proton11.
@@ -35,7 +43,7 @@ Set in `launch::plan_with`; the game's own Env wins.
 ## Known, per game
 
 - Bakin games refuse to start on Wine Mono alone ("needs .NET 4.5 or later": Mono never writes
-  the registry marker); install `dotnet48` into the prefix with winetricks. They also show
+  the registry marker); install `dotnet48` from Launch options > Install into this game's prefix. They also show
   "failed to build battlescript, using default battlescript": Roslyn needs
   `Microsoft.DiaSymReader.Native.amd64.dll` (comes with Windows), which Wine Mono lacks. The
   game runs on the default script; real .NET may supply the DLL (untested).

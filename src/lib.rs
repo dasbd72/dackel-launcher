@@ -29,3 +29,4 @@ pub mod tuning;
 pub mod umu;
 pub mod vdf;
 pub mod window;
+pub mod winetricks;

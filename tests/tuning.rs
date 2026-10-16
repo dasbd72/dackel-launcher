@@ -1,9 +1,7 @@
 use dackel_launcher::launch::{LaunchPlan, Launcher, Process, Spawner, plan_with};
 use dackel_launcher::profile::{self, ExeState, Tuning, read_tuning, set_proton_pin, set_tuning};
 use dackel_launcher::proton::{ProtonChoice, installed, resolve_for_game, selectable};
-use dackel_launcher::tuning::{
-    format_env, parse_env, prefix_dir, reset_prefix, split_args, winetricks_command,
-};
+use dackel_launcher::tuning::{format_env, parse_env, prefix_dir, reset_prefix, split_args};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
@@ -491,26 +489,6 @@ mod prefix {
         let game = tempfile::tempdir().unwrap();
 
         assert!(reset_prefix(game.path()).is_ok());
-    }
-}
-
-mod winetricks {
-    use super::*;
-
-    #[test]
-    fn the_command_points_winetricks_at_the_games_prefix() {
-        assert_eq!(
-            winetricks_command(Path::new("/lib/RJ1")),
-            "WINEPREFIX='/lib/RJ1/.dackel-launcher/wine' winetricks"
-        );
-    }
-
-    #[test]
-    fn paths_with_spaces_and_quotes_are_shell_safe() {
-        assert_eq!(
-            winetricks_command(Path::new("/my lib/it's/RJ1")),
-            r#"WINEPREFIX='/my lib/it'\''s/RJ1/.dackel-launcher/wine' winetricks"#
-        );
     }
 }
 

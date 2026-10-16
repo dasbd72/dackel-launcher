@@ -36,6 +36,7 @@ use dackel_launcher::steam::{self, LauncherState};
 use dackel_launcher::steam_art::{self, IconSource};
 use dackel_launcher::tuning::reset_prefix;
 use dackel_launcher::window::{self, RestoreStep, WindowCommand, WindowState};
+use dackel_launcher::winetricks;
 use details::{DetailsView, SteamChange, TuningEdit, details_ui, exe_choices, text_box};
 use eframe::egui;
 use egui_file_dialog::{FileDialog, OpeningMode};
@@ -270,6 +271,8 @@ struct App {
     steam_cache: std::cell::RefCell<Option<(PathBuf, bool)>>,
     /// Steam file and image work running in the background, and its result.
     steam_job: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// Winetricks installs running in the background, by game folder.
+    winetricks_jobs: std::collections::HashMap<PathBuf, WinetricksJob>,
     /// What Steam has for the launcher itself.
     launcher_cache: std::cell::Cell<Option<LauncherState>>,
     /// A text box of the Libraries window has the keyboard; the pad's B and up/down leave it.
@@ -324,6 +327,7 @@ impl App {
             steam_cache: std::cell::RefCell::new(None),
             launcher_cache: std::cell::Cell::new(None),
             steam_job: None,
+            winetricks_jobs: std::collections::HashMap::new(),
             library_typing: false,
             library_leave: false,
             browser: FileDialog::new()
@@ -618,6 +622,10 @@ impl App {
 
     /// Spawns the game with the given Proton (`None`: umu's own choice).
     fn start_game(&mut self, dir: &Path, proton: Option<&Path>) -> bool {
+        if self.winetricks_jobs.contains_key(dir) {
+            self.message = Some("Wait for the install to finish before launching".to_owned());
+            return false;
+        }
         let View::Games(entries) = &self.view else {
             return false;
         };
@@ -984,6 +992,7 @@ impl App {
             save,
             set_proton,
             reset_prefix: reset,
+            install,
         } = result;
         if let Some((env, args)) = save {
             self.message = Some(match profile::set_tuning(&dir, env, &args) {
@@ -1003,14 +1012,93 @@ impl App {
                 Err(err) => format!("Could not save the Proton choice: {err}"),
             });
         }
+        if let Some(verbs) = install {
+            self.start_winetricks(&dir, &id, verbs);
+        }
         if reset {
             self.message = Some(if self.launcher.is_running(&dir) {
                 "Close the game before resetting its prefix".to_owned()
+            } else if self.winetricks_jobs.contains_key(&dir) {
+                "Wait for the install to finish before resetting the prefix".to_owned()
             } else {
                 match reset_prefix(&dir) {
-                    Ok(()) => format!("Reset the Wine prefix of {id}"),
+                    Ok(()) => {
+                        if let Some(edit) = self.tuning_edit.as_mut() {
+                            edit.installed.clear();
+                        }
+                        format!("Reset the Wine prefix of {id}")
+                    }
                     Err(err) => format!("Could not reset the prefix: {err}"),
                 }
+            });
+        }
+    }
+
+    /// Installs winetricks verbs into the game's prefix in the background.
+    fn start_winetricks(&mut self, dir: &Path, id: &str, verbs: Vec<String>) {
+        if self.winetricks_jobs.contains_key(dir) {
+            self.message = Some(format!("{id} is already installing"));
+            return;
+        }
+        if self.launcher.is_running(dir) {
+            self.message = Some("Close the game before installing into its prefix".to_owned());
+            return;
+        }
+        let tuning = profile::read_tuning(dir).unwrap_or_default();
+        let proton = match proton::resolve_for_game_default(tuning.proton.as_deref()) {
+            Ok(choice) => dackel_launcher::headless::proton_for(choice),
+            Err(err) => {
+                self.message = Some(format!("Could not find a Proton: {err}"));
+                return;
+            }
+        };
+        let plan = winetricks::plan(dir, &verbs, proton.as_deref(), &tuning);
+        let (sender, result) = std::sync::mpsc::channel();
+        let repaint = self.repaint.clone();
+        let (game, list) = (dir.to_path_buf(), verbs.clone());
+        std::thread::spawn(move || {
+            let _ = sender.send(winetricks::install(&game, &plan, &list));
+            if let Some(ctx) = repaint {
+                ctx.request_repaint();
+            }
+        });
+        self.message = Some(format!("Installing {} into {id}...", verbs.join(" ")));
+        self.winetricks_jobs.insert(
+            dir.to_path_buf(),
+            WinetricksJob {
+                id: id.to_owned(),
+                verbs,
+                result,
+            },
+        );
+    }
+
+    /// Reports the installs that have finished.
+    fn poll_winetricks(&mut self) {
+        let mut finished = Vec::new();
+        for (dir, job) in &self.winetricks_jobs {
+            let outcome = match job.result.try_recv() {
+                Ok(outcome) => outcome,
+                Err(std::sync::mpsc::TryRecvError::Empty) => continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err("the install stopped unexpectedly".to_owned())
+                }
+            };
+            finished.push((dir.clone(), outcome));
+        }
+        for (dir, outcome) in finished {
+            let Some(job) = self.winetricks_jobs.remove(&dir) else {
+                continue;
+            };
+            self.message = Some(match outcome {
+                Ok(()) => {
+                    // The details page may have moved on to another game since.
+                    if let Some(edit) = self.tuning_edit.as_mut().filter(|e| e.dir == dir) {
+                        edit.installed = profile::read_winetricks(&dir).unwrap_or_default();
+                    }
+                    format!("Installed {} into {}", job.verbs.join(" "), job.id)
+                }
+                Err(err) => format!("{}: {err}", job.id),
             });
         }
     }
@@ -1470,6 +1558,7 @@ impl App {
             save: None,
             set_proton: Some(version),
             reset_prefix: false,
+            install: None,
         };
         self.apply_tuning(result);
     }
@@ -1707,6 +1796,7 @@ impl eframe::App for App {
         }
         self.poll_extractions();
         self.poll_steam();
+        self.poll_winetricks();
         if self.jobs.any() {
             // Backstop in case a wake-up is missed.
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -1957,7 +2047,7 @@ impl eframe::App for App {
                     busy: self.infos.is_busy(id),
                     running: self.launcher.is_running(&entry.game.dir),
                     extracting: self.jobs.progress(&entry.game.dir_key()),
-                    dir: &entry.game.dir,
+                    installing: self.winetricks_jobs.contains_key(&entry.game.dir),
                     steam_entry: self.steam_entry(&entry.game.dir),
                 };
                 if self.tuning_edit.as_ref().is_none_or(|e| e.key != *id) {
@@ -1979,6 +2069,7 @@ impl eframe::App for App {
                     save: action.save_tuning,
                     set_proton: action.set_proton,
                     reset_prefix: action.reset_prefix,
+                    install: action.install,
                 });
                 if let Some(control) = action.focus {
                     self.cursor.focus(control);
@@ -2576,4 +2667,12 @@ struct TuningResult {
     save: Option<(std::collections::BTreeMap<String, String>, String)>,
     set_proton: Option<Option<String>>,
     reset_prefix: bool,
+    install: Option<Vec<String>>,
+}
+
+/// A winetricks install running off the UI thread.
+struct WinetricksJob {
+    id: String,
+    verbs: Vec<String>,
+    result: std::sync::mpsc::Receiver<Result<(), String>>,
 }

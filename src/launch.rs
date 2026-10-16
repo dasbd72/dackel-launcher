@@ -131,6 +131,16 @@ impl Process for Child {
     }
 }
 
+/// The program a plan runs: `umu-run` is looked up, anything else is taken as it is.
+pub fn program_of(plan: &LaunchPlan) -> io::Result<PathBuf> {
+    if plan.program == "umu-run" {
+        crate::umu::locate_default()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, crate::umu::missing_message()))
+    } else {
+        Ok(PathBuf::from(&plan.program))
+    }
+}
+
 /// A game that starts after its prefix setup step finishes, on a background thread.
 struct Staged(std::sync::Arc<std::sync::Mutex<Stage>>);
 
@@ -157,7 +167,7 @@ impl Process for Staged {
     }
 }
 
-fn command(
+pub fn command(
     program: &Path,
     args: &[OsString],
     plan: &LaunchPlan,
@@ -182,13 +192,7 @@ impl Spawner for UmuSpawner {
         if let Some(dir) = plan.log_path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let program = if plan.program == "umu-run" {
-            crate::umu::locate_default().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, crate::umu::missing_message())
-            })?
-        } else {
-            PathBuf::from(&plan.program)
-        };
+        let program = program_of(plan)?;
         let log = std::fs::File::create(&plan.log_path)?;
         let Some(setup) = plan.setup.clone() else {
             let child = command(&program, &plan.args, plan, &log)?.spawn()?;
