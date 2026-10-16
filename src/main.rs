@@ -996,7 +996,12 @@ impl App {
         } = result;
         if let Some((env, args)) = save {
             self.message = Some(match profile::set_tuning(&dir, env, &args) {
-                Ok(()) => format!("Saved launch options for {id}"),
+                Ok(()) => {
+                    if let Some(edit) = self.tuning_edit.as_mut().filter(|e| e.dir == dir) {
+                        edit.refresh();
+                    }
+                    format!("Saved launch options for {id}")
+                }
                 Err(err) => format!("Could not save launch options: {err}"),
             });
         }
@@ -1442,6 +1447,7 @@ impl App {
     /// Opens the details page for a game; focus starts on its Launch button.
     fn open_details_page(&mut self, id: String) {
         self.screen = Screen::Details(id);
+        self.drop_tuning_edit();
         self.details_scroll = 0.0;
         self.cursor.open_details();
     }
@@ -1449,7 +1455,19 @@ impl App {
     /// Back to the library; focus returns to the game that was selected.
     fn close_details_page(&mut self) {
         self.screen = Screen::Grid;
+        self.drop_tuning_edit();
         self.cursor.close_details();
+    }
+
+    /// Unsaved Launch options text does not outlive the page it was typed on.
+    fn drop_tuning_edit(&mut self) {
+        let open = match &self.screen {
+            Screen::Details(id) => Some(id.as_str()),
+            Screen::Grid => None,
+        };
+        if self.tuning_edit.as_ref().is_some_and(|e| !e.keeps(open)) {
+            self.tuning_edit = None;
+        }
     }
 
     /// The values the toolbar dropdowns choose between, as they are now.

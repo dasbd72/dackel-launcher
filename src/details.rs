@@ -86,6 +86,20 @@ impl TuningEdit {
             focus: None,
         }
     }
+
+    /// Whether the form is kept while `open` is the game on the details page (`None` when no
+    /// details page is open). Anything else leaves unsaved text behind, so it is dropped.
+    pub fn keeps(&self, open: Option<&str>) -> bool {
+        open == Some(self.key.as_str())
+    }
+
+    /// Re-reads the saved env and arguments after a save, so the boxes show what was written.
+    /// Everything else on the form is left as it is.
+    pub fn refresh(&mut self) {
+        let tuning = profile::read_tuning(&self.dir).unwrap_or_default();
+        self.env_text = format_env(&tuning.env);
+        self.args = tuning.args;
+    }
 }
 
 pub struct DetailsView<'a> {
@@ -979,5 +993,64 @@ mod tests {
                 "{width} wide: the pad cannot reach {missed:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_save_then_refresh_shows_what_was_written() {
+        let game = tempfile::tempdir().unwrap();
+        let mut edit = TuningEdit::load("k".into(), game.path());
+        edit.env_text = "A=1\n  B = \"two\"".to_owned();
+        edit.args = "  -windowed   -fps 60 ".to_owned();
+        edit.verbs_text = "dotnet48".to_owned();
+        edit.open = true;
+
+        let env = parse_env(&edit.env_text).unwrap();
+        profile::set_tuning(game.path(), env, &edit.args).unwrap();
+        edit.refresh();
+
+        assert_eq!(edit.env_text, "A=1\nB=two\n");
+        assert_eq!(edit.args, "  -windowed   -fps 60 ");
+        assert_eq!(edit.verbs_text, "dotnet48");
+        assert!(edit.open);
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_typed_text() {
+        let game = tempfile::tempdir().unwrap();
+        // A file where the game folder should be, so the save cannot write its profile.
+        let blocked = game.path().join("blocked");
+        std::fs::write(&blocked, "").unwrap();
+        let mut edit = TuningEdit::load("k".into(), game.path());
+        edit.env_text = "A=1".to_owned();
+        edit.args = "-windowed".to_owned();
+
+        let env = parse_env(&edit.env_text).unwrap();
+        assert!(profile::set_tuning(&blocked, env, &edit.args).is_err());
+
+        assert_eq!(edit.env_text, "A=1");
+        assert_eq!(edit.args, "-windowed");
+    }
+
+    #[test]
+    fn a_fresh_load_shows_the_stored_values_not_the_unsaved_text() {
+        let game = tempfile::tempdir().unwrap();
+        let env = parse_env("A=1").unwrap();
+        profile::set_tuning(game.path(), env, "-windowed").unwrap();
+
+        let mut edit = TuningEdit::load("k".into(), game.path());
+        edit.env_text = "UNSAVED=yes".to_owned();
+        edit.args = "-unsaved".to_owned();
+
+        let edit = TuningEdit::load("k".into(), game.path());
+        assert_eq!(edit.env_text, "A=1\n");
+        assert_eq!(edit.args, "-windowed");
+    }
+
+    #[test]
+    fn the_form_is_kept_only_while_its_own_game_is_open() {
+        let edit = TuningEdit::load("RJ1".into(), &std::env::temp_dir());
+        assert!(edit.keeps(Some("RJ1")));
+        assert!(!edit.keeps(Some("RJ2")));
+        assert!(!edit.keeps(None));
     }
 }
