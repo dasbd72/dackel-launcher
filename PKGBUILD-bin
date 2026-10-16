@@ -1,7 +1,7 @@
 # Maintainer: dasbd72 <twbd723@gmail.com>
 pkgname=dackel-launcher-bin
 _name=dackel-launcher
-pkgver=0.1.7
+pkgver=0.1.8
 pkgrel=1
 pkgdesc='Launch Windows games with Proton, with gamepad support (prebuilt binary)'
 arch=('x86_64')
