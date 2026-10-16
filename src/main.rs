@@ -288,6 +288,8 @@ struct App {
     library_typing: bool,
     /// Leave that text box at the next draw.
     library_leave: bool,
+    search_typing: bool,
+    search_leave: bool,
     /// The popup that is open, if any.
     popup: Option<Popup>,
     /// How far down the details page is scrolled, in points.
@@ -339,6 +341,8 @@ impl App {
             winetricks_jobs: std::collections::HashMap::new(),
             library_typing: false,
             library_leave: false,
+            search_typing: false,
+            search_leave: false,
             browser: FileDialog::new()
                 .title("Add a library folder")
                 .opening_mode(OpeningMode::AlwaysInitialDir)
@@ -1705,6 +1709,8 @@ impl App {
         let libraries_open = matches!(self.popup, Some(Popup::Libraries));
         let typing = if libraries_open {
             self.library_typing
+        } else if self.search_typing {
+            true
         } else {
             self.tuning_edit.as_ref().is_some_and(|e| e.typing)
         };
@@ -1713,6 +1719,7 @@ impl App {
                 Command::Back | Command::ChooserCancel | Command::Move(Dir::Up | Dir::Down) => {
                     match self.tuning_edit.as_mut() {
                         _ if libraries_open => self.library_leave = true,
+                        _ if self.search_typing => self.search_leave = true,
                         Some(edit) => edit.leave = true,
                         None => {}
                     }
@@ -2021,9 +2028,9 @@ impl eframe::App for App {
                 if frame.pressed(ui, Control::Libraries, &response, true) {
                     self.popup = Some(Popup::Libraries);
                 }
-                let response =
-                    icon_button(ui, Icon::AddZip, "Add zip…", self.libraries.count() > 0);
-                if response.clicked() {
+                let enabled = self.libraries.count() > 0;
+                let response = icon_button(ui, Icon::AddZip, "Add zip…", enabled);
+                if frame.pressed(ui, Control::AddZip, &response, enabled) {
                     self.add_zip_picker.pick_multiple();
                 }
                 let response = icon_button(ui, Icon::Fullscreen, "Fullscreen (F11)", true);
@@ -2085,7 +2092,17 @@ impl eframe::App for App {
                         frame.register(ui, Control::LibraryFilter, &response);
                     }
                     ui.label("Search");
-                    ui.text_edit_singleline(&mut self.query.text);
+                    let edit = text_box(
+                        ui,
+                        &mut frame,
+                        Control::Search,
+                        egui::TextEdit::singleline(&mut self.query.text),
+                    );
+                    self.search_typing = edit.has_focus();
+                    if std::mem::take(&mut self.search_leave) {
+                        edit.surrender_focus();
+                        self.search_typing = false;
+                    }
                     let response = ui.checkbox(&mut self.query.favorites_only, "Favorites only");
                     frame.register(ui, Control::FavoritesOnly, &response);
                     if frame.activated(Control::FavoritesOnly) {

@@ -62,6 +62,8 @@ pub enum Control {
     // Toolbar.
     Rescan,
     Libraries,
+    /// Opens the file picker to add zips to a library.
+    AddZip,
     /// Opens the Settings window.
     Settings,
     /// Adds the launcher itself to Steam.
@@ -78,6 +80,8 @@ pub enum Control {
     Blur,
     Sort,
     LibraryFilter,
+    /// The game search box above the grid.
+    Search,
     FavoritesOnly,
     Quit,
     // Details page.
