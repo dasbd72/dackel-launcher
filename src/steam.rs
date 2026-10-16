@@ -439,7 +439,7 @@ pub fn save_shortcuts(path: &Path, root: &Value) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(path, crate::vdf::write(root))
+    crate::atomic::write(path, crate::vdf::write(root))
 }
 
 /// The launcher's artwork, drawn by `scripts/make-steam-art.sh`, as Steam names each image.
