@@ -44,6 +44,11 @@ pub fn plan_with(
     env.insert("LANG".to_owned(), "ja_JP.UTF-8".to_owned());
     env.insert("LC_ALL".to_owned(), "ja_JP.UTF-8".to_owned());
     env.insert("GAMEID".to_owned(), game_id(game_dir));
+    // Wine's Wayland driver cannot give OpenGL games (Bakin's engine) a context; X11 can.
+    env.insert(
+        "WINEDLLOVERRIDES".to_owned(),
+        "winewayland.drv=d".to_owned(),
+    );
     if let Some(proton) = proton {
         env.insert("PROTONPATH".to_owned(), proton.display().to_string());
     }

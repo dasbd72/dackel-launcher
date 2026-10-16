@@ -253,3 +253,30 @@ fn quotes_saved_around_an_env_value_do_not_reach_the_game() {
         Some("fps,memory")
     );
 }
+
+#[test]
+fn wines_wayland_driver_is_off_unless_the_game_sets_its_own_overrides() {
+    use dackel_launcher::launch::plan_with;
+    use dackel_launcher::profile::Tuning;
+    let game = Path::new("/library/RJ123456");
+
+    let default = plan(game, Path::new("Game.exe"), None);
+    let own = plan_with(
+        game,
+        Path::new("Game.exe"),
+        None,
+        &Tuning {
+            env: [("WINEDLLOVERRIDES".to_owned(), "dxgi=n".to_owned())].into(),
+            ..Tuning::default()
+        },
+    );
+
+    assert_eq!(
+        default.env.get("WINEDLLOVERRIDES").map(String::as_str),
+        Some("winewayland.drv=d")
+    );
+    assert_eq!(
+        own.env.get("WINEDLLOVERRIDES").map(String::as_str),
+        Some("dxgi=n")
+    );
+}
