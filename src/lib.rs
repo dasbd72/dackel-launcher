@@ -17,6 +17,7 @@ pub mod nav;
 pub mod pad;
 pub mod pickers;
 pub mod popup;
+pub mod prefix;
 pub mod profile;
 pub mod proton;
 pub mod reload;

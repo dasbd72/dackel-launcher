@@ -15,6 +15,10 @@ pub struct LaunchPlan {
     pub env: BTreeMap<String, String>,
     pub working_dir: PathBuf,
     pub log_path: PathBuf,
+    /// A step to run to completion first (same program and environment); see `prefix::prepare`.
+    pub setup: Option<Vec<OsString>>,
+    /// Written once the setup step succeeded, so it is not run again.
+    pub marker: Option<PathBuf>,
 }
 
 /// Builds the `umu-run` invocation for a game's exe. Pure: no filesystem access.
@@ -65,6 +69,8 @@ pub fn plan_with(
         env,
         working_dir,
         log_path: meta.join("last-run.log"),
+        setup: None,
+        marker: None,
     }
 }
 
@@ -120,11 +126,54 @@ impl Process for Child {
     }
 }
 
+/// A game that starts after its prefix setup step finishes, on a background thread.
+struct Staged(std::sync::Arc<std::sync::Mutex<Stage>>);
+
+enum Stage {
+    Preparing,
+    Running(std::process::Child),
+    Done,
+}
+
+impl Process for Staged {
+    fn has_exited(&mut self) -> io::Result<bool> {
+        let mut stage = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        match &mut *stage {
+            Stage::Preparing => Ok(false),
+            Stage::Running(child) => {
+                let exited = child.try_wait()?.is_some();
+                if exited {
+                    *stage = Stage::Done;
+                }
+                Ok(exited)
+            }
+            Stage::Done => Ok(true),
+        }
+    }
+}
+
+fn command(
+    program: &Path,
+    args: &[OsString],
+    plan: &LaunchPlan,
+    log: &std::fs::File,
+) -> io::Result<std::process::Command> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .envs(&plan.env)
+        .current_dir(&plan.working_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log.try_clone()?))
+        .stderr(Stdio::from(log.try_clone()?))
+        .process_group(0);
+    Ok(cmd)
+}
+
 impl Spawner for UmuSpawner {
     fn spawn(&self, plan: &LaunchPlan) -> io::Result<Box<dyn Process>> {
-        use std::os::unix::process::CommandExt;
-        use std::process::{Command, Stdio};
-
         if let Some(dir) = plan.log_path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -136,17 +185,41 @@ impl Spawner for UmuSpawner {
             PathBuf::from(&plan.program)
         };
         let log = std::fs::File::create(&plan.log_path)?;
-        let log_err = log.try_clone()?;
-        let child = Command::new(&program)
-            .args(&plan.args)
-            .envs(&plan.env)
-            .current_dir(&plan.working_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log))
-            .stderr(Stdio::from(log_err))
-            .process_group(0)
-            .spawn()?;
-        Ok(Box::new(Child(child)))
+        let Some(setup) = plan.setup.clone() else {
+            let child = command(&program, &plan.args, plan, &log)?.spawn()?;
+            return Ok(Box::new(Child(child)));
+        };
+
+        let stage = std::sync::Arc::new(std::sync::Mutex::new(Stage::Preparing));
+        let shared = stage.clone();
+        let plan = plan.clone();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let note = |text: &str| {
+                let _ = writeln!(&log, "dackel-launcher: {text}");
+            };
+            note("setting up the prefix");
+            let ok = command(&program, &setup, &plan, &log)
+                .and_then(|mut c| c.status())
+                .is_ok_and(|status| status.success());
+            if ok {
+                if let Some(marker) = &plan.marker {
+                    let _ = std::fs::write(marker, b"");
+                }
+            } else {
+                note("prefix setup failed, starting the game anyway");
+            }
+            let next = match command(&program, &plan.args, &plan, &log).and_then(|mut c| c.spawn())
+            {
+                Ok(child) => Stage::Running(child),
+                Err(err) => {
+                    note(&format!("could not start the game: {err}"));
+                    Stage::Done
+                }
+            };
+            *shared.lock().unwrap_or_else(|e| e.into_inner()) = next;
+        });
+        Ok(Box::new(Staged(stage)))
     }
 }
 
@@ -186,7 +259,8 @@ impl<S: Spawner> Launcher<S> {
             return Err(LaunchError::AlreadyRunning);
         }
         let tuning = profile::read_tuning(game_dir)?;
-        let plan = plan_with(game_dir, exe, proton, &tuning);
+        let mut plan = plan_with(game_dir, exe, proton, &tuning);
+        crate::prefix::prepare(game_dir, &mut plan)?;
         let process = self.spawner.spawn(&plan)?;
         // Track the game first: once it is running, nothing below may lose sight of it.
         self.running.push(Running {
