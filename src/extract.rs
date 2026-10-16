@@ -304,7 +304,7 @@ pub fn extract_with_existing(
     if let Some(part) = created.part.take() {
         let _ = fs::remove_file(part);
     }
-    if matches!(result, Err(ExtractError::Cancelled)) {
+    if result.is_err() {
         created.roll_back();
     }
     result

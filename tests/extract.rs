@@ -533,3 +533,17 @@ fn skipping_existing_files_keeps_them_and_writes_only_the_new_ones() {
     assert_eq!(last.files_done, 1);
     assert_eq!(last.fraction(), 1.0);
 }
+
+#[test]
+fn a_write_error_part_way_removes_what_the_run_created() {
+    let dir = tempfile::tempdir().unwrap();
+    // `Game/a.txt` is a file, so `Game/a.txt/b.txt` cannot be written after it.
+    write_zip(
+        &dir.path().join("RJ1.zip"),
+        &[("Game/a.txt", b"x"), ("Game/a.txt/b.txt", b"y")],
+    );
+
+    assert!(extract(dir.path(), Encoding::Auto).is_err());
+
+    assert_eq!(names_in(dir.path()), ["RJ1.zip"]);
+}
