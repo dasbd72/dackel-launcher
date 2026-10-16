@@ -513,3 +513,15 @@ mod winetricks {
         );
     }
 }
+
+#[test]
+fn quotes_around_an_env_value_are_dropped_as_a_shell_would() {
+    use dackel_launcher::tuning::parse_env;
+    let env = parse_env("A=\"winewayland.drv=d\"\nB='x y'\nC=\"half\nD=\"\"\nE=plain\n").unwrap();
+
+    assert_eq!(env["A"], "winewayland.drv=d");
+    assert_eq!(env["B"], "x y");
+    assert_eq!(env["C"], "\"half");
+    assert_eq!(env["D"], "");
+    assert_eq!(env["E"], "plain");
+}

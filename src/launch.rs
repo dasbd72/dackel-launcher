@@ -44,7 +44,12 @@ pub fn plan_with(
         env.insert("PROTONPATH".to_owned(), proton.display().to_string());
     }
     let prefix = env["WINEPREFIX"].clone();
-    env.extend(tuning.env.clone());
+    env.extend(
+        tuning
+            .env
+            .iter()
+            .map(|(k, v)| (k.clone(), crate::tuning::unquote(v).to_owned())),
+    );
     env.insert("WINEPREFIX".to_owned(), prefix);
     let mut args = vec![exe.clone().into_os_string()];
     args.extend(

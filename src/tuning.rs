@@ -26,9 +26,22 @@ pub fn parse_env(text: &str) -> Result<BTreeMap<String, String>, String> {
         if !is_env_name(key) {
             return Err(format!("line {n}: \"{key}\" is not a valid variable name"));
         }
-        map.insert(key.to_owned(), value.trim().to_owned());
+        map.insert(key.to_owned(), unquote(value.trim()).to_owned());
     }
     Ok(map)
+}
+
+/// Drops one pair of matching quotes around a value, as typed in a shell: `"a=b"` is `a=b`.
+pub fn unquote(value: &str) -> &str {
+    ['"', '\'']
+        .into_iter()
+        .find_map(|q| {
+            value
+                .strip_prefix(q)
+                .and_then(|v| v.strip_suffix(q))
+                .filter(|_| value.len() >= 2)
+        })
+        .unwrap_or(value)
 }
 
 fn is_env_name(name: &str) -> bool {

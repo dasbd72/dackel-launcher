@@ -231,3 +231,25 @@ fn the_real_spawner_runs_the_plan_in_its_folder_with_env_and_log() {
     assert!(log.contains(".dackel-launcher/wine"), "log was {log}");
     assert!(log.contains("oops"), "stderr missing from {log}");
 }
+
+#[test]
+fn quotes_saved_around_an_env_value_do_not_reach_the_game() {
+    use dackel_launcher::launch::plan_with;
+    use dackel_launcher::profile::Tuning;
+    let tuning = Tuning {
+        env: [("DXVK_HUD".to_owned(), "\"fps,memory\"".to_owned())].into(),
+        ..Tuning::default()
+    };
+
+    let p = plan_with(
+        Path::new("/library/RJ1"),
+        Path::new("Game.exe"),
+        None,
+        &tuning,
+    );
+
+    assert_eq!(
+        p.env.get("DXVK_HUD").map(String::as_str),
+        Some("fps,memory")
+    );
+}
