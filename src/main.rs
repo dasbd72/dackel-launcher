@@ -1,8 +1,10 @@
+mod add_zip;
 mod covers;
 mod details;
 mod focus;
 mod icons;
 
+use add_zip::{AddZip, Done};
 use covers::{BlurCache, CoverView};
 use dackel_launcher::actions::{Actions, Exclusive};
 use dackel_launcher::browse::{self, Card, Query, Sort};
@@ -12,6 +14,7 @@ use dackel_launcher::extract::{self, Encoding, Existing, Progress, Status};
 use dackel_launcher::fetch::HttpFetch;
 use dackel_launcher::fonts;
 use dackel_launcher::headless;
+use dackel_launcher::import::{self, FileResult, Outcome, Policy};
 use dackel_launcher::info::{GameInfo, cover_path, load};
 use dackel_launcher::jobs::{Cancelled, ExtractJob, JobStatus, Jobs, OverwriteCheck};
 use dackel_launcher::launch::{Launcher, UmuSpawner, unix_now};
@@ -260,6 +263,12 @@ struct App {
     libraries: LibraryList,
     /// The folder browser opened by "Browse..." in the Libraries window.
     browser: FileDialog,
+    /// The archive picker opened by "Add zip" on the toolbar.
+    add_zip_picker: FileDialog,
+    /// The "Add zip" dialog, while it is open.
+    add_zip: Option<AddZip>,
+    /// What each archive became in the last "Add zip", shown until closed.
+    add_zip_results: Option<Vec<FileResult>>,
     /// Whether the session is a Deck's; picks the fallback UI scale.
     deck_like: bool,
     /// The size on screen is worked out from the system scale once the window system has
@@ -337,6 +346,9 @@ impl App {
                     std::env::var_os("HOME").map(PathBuf::from).as_deref(),
                 ))
                 .show_new_folder_button(false),
+            add_zip_picker: add_zip::picker(std::env::var_os("HOME").map(PathBuf::from).as_deref()),
+            add_zip: None,
+            add_zip_results: None,
             popup: None,
             details_scroll: 0.0,
             tuning_edit: None,
@@ -1322,6 +1334,100 @@ impl App {
         launcher_change
     }
 
+    /// The "Add zip" flow: the archive picker, the add dialog, and the per-file results.
+    fn add_zip_windows(&mut self, ctx: &egui::Context) {
+        self.add_zip_picker.update(ctx);
+        if let Some(files) = self.add_zip_picker.take_picked_multiple() {
+            let files: Vec<PathBuf> = files.into_iter().filter(|f| f.is_file()).collect();
+            if !files.is_empty() {
+                self.add_zip = Some(AddZip::new(files));
+            }
+        }
+        if let Some(dialog) = &mut self.add_zip {
+            let labels = library_labels(self.libraries.roots());
+            match dialog.show(ctx, self.libraries.roots(), &labels) {
+                None => {}
+                Some(Done::Cancel) => self.add_zip = None,
+                Some(Done::Import {
+                    library,
+                    items,
+                    policy,
+                }) => {
+                    self.add_zip = None;
+                    self.import_archives(&library, &items, policy);
+                }
+            }
+        }
+        if let Some(results) = &self.add_zip_results {
+            let mut close = false;
+            egui::Window::new("Added")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    for result in results {
+                        let file = result
+                            .source
+                            .file_name()
+                            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                        ui.label(format!("{file}: {}", add_zip::result_text(&result.outcome)));
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                    }
+                });
+            if close {
+                self.add_zip_results = None;
+            }
+        }
+    }
+
+    /// Moves the archives into the library, then rescans, selects the first new game and
+    /// shows the outcome in the status line.
+    fn import_archives(&mut self, library: &Path, items: &[(PathBuf, String)], policy: Policy) {
+        let results = import::import(library, items, policy);
+        let folders: Vec<String> = results
+            .iter()
+            .filter_map(|r| match &r.outcome {
+                Outcome::Moved { dest, .. } => dest.parent().map(Path::to_path_buf),
+                _ => None,
+            })
+            .filter_map(|folder| folder.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        let skipped = results
+            .iter()
+            .filter(|r| matches!(r.outcome, Outcome::Skipped))
+            .count();
+        let failed = results
+            .iter()
+            .filter(|r| matches!(r.outcome, Outcome::Failed(_)))
+            .count();
+        let first = results.iter().find_map(|r| match &r.outcome {
+            Outcome::Moved { dest, .. } => dest.parent().map(Path::to_path_buf),
+            _ => None,
+        });
+        self.rescan();
+        if let Some(folder) = first
+            && let View::Games(entries) = &self.view
+            && let Some(entry) = entries.iter().find(|e| e.game.dir == folder)
+        {
+            let key = entry.game.key();
+            self.cursor.select_game(key);
+        }
+        let extra = match (skipped, failed) {
+            (0, 0) => String::new(),
+            (s, 0) => format!(" ({s} skipped)"),
+            (0, f) => format!(" ({f} failed)"),
+            (s, f) => format!(" ({s} skipped, {f} failed)"),
+        };
+        self.message = Some(if folders.is_empty() {
+            format!("Nothing added{extra}")
+        } else {
+            format!("Added {}{extra}", folders.join(", "))
+        });
+        self.add_zip_results = Some(results);
+    }
+
     /// The manager for the added libraries: list them, add a typed path, remove one.
     fn libraries_window(&mut self, ctx: &egui::Context, frame: &mut FocusFrame) {
         let mut remove: Option<usize> = None;
@@ -1915,6 +2021,11 @@ impl eframe::App for App {
                 if frame.pressed(ui, Control::Libraries, &response, true) {
                     self.popup = Some(Popup::Libraries);
                 }
+                let response =
+                    icon_button(ui, Icon::AddZip, "Add zip…", self.libraries.count() > 0);
+                if response.clicked() {
+                    self.add_zip_picker.pick_multiple();
+                }
                 let response = icon_button(ui, Icon::Fullscreen, "Fullscreen (F11)", true);
                 actions.fullscreen = frame.pressed(ui, Control::Fullscreen, &response, true);
                 let response = icon_button(
@@ -2244,6 +2355,7 @@ impl eframe::App for App {
         if self.overwrite_prompt_open() {
             self.overwrite_prompt_window(ui.ctx());
         }
+        self.add_zip_windows(ui.ctx());
         if let Some(result) = tuning_action {
             self.apply_tuning(result);
         }

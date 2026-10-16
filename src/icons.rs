@@ -24,6 +24,7 @@ const CLOSE: &[u8] = include_bytes!("../assets/icons/x.svg");
 const GEAR: &[u8] = include_bytes!("../assets/icons/gear.svg");
 const RESCAN: &[u8] = include_bytes!("../assets/icons/arrows-clockwise.svg");
 const FOLDER: &[u8] = include_bytes!("../assets/icons/folder-open.svg");
+const FILE_ZIP: &[u8] = include_bytes!("../assets/icons/file-zip.svg");
 const FULLSCREEN: &[u8] = include_bytes!("../assets/icons/arrows-out.svg");
 const EYE: &[u8] = include_bytes!("../assets/icons/eye.svg");
 const EYE_SLASH: &[u8] = include_bytes!("../assets/icons/eye-slash.svg");
@@ -40,6 +41,7 @@ pub enum Icon {
     Settings,
     Rescan,
     Libraries,
+    AddZip,
     Fullscreen,
     /// Blur is on: the images are hidden.
     Blur {
@@ -59,6 +61,7 @@ impl Icon {
             Icon::Settings => ("bytes://icons/gear.svg", GEAR),
             Icon::Rescan => ("bytes://icons/arrows-clockwise.svg", RESCAN),
             Icon::Libraries => ("bytes://icons/folder-open.svg", FOLDER),
+            Icon::AddZip => ("bytes://icons/file-zip.svg", FILE_ZIP),
             Icon::Fullscreen => ("bytes://icons/arrows-out.svg", FULLSCREEN),
             Icon::Blur { on: true } => ("bytes://icons/eye-slash.svg", EYE_SLASH),
             Icon::Blur { on: false } => ("bytes://icons/eye.svg", EYE),

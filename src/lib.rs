@@ -9,6 +9,7 @@ pub mod extract;
 pub mod fetch;
 pub mod fonts;
 pub mod headless;
+pub mod import;
 pub mod info;
 pub mod jobs;
 pub mod launch;

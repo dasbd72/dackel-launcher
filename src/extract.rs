@@ -28,6 +28,8 @@ pub enum Status {
 pub enum Unsupported {
     SplitArchive,
     SelfExtracting,
+    /// A 7z, rar or tar.gz archive with no zip beside it. Only zips are extracted.
+    OtherArchive,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +117,13 @@ fn is_split_part(name: &str) -> bool {
     false
 }
 
+fn is_other_archive(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    [".7z", ".rar", ".tar.gz"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
 fn has_zip_tail(path: &Path) -> io::Result<bool> {
     let mut file = File::open(path)?;
     let len = file.metadata()?.len();
@@ -129,6 +138,14 @@ fn has_zip_tail(path: &Path) -> io::Result<bool> {
 fn unsupported(game_dir: &Path, listed: &[Listed]) -> io::Result<Option<Unsupported>> {
     if listed.iter().any(|e| !e.is_dir && is_split_part(&e.name)) {
         return Ok(Some(Unsupported::SplitArchive));
+    }
+    let has_zip = listed.iter().any(|e| !e.is_dir && is_zip(&e.name));
+    if !has_zip
+        && listed
+            .iter()
+            .any(|e| !e.is_dir && is_other_archive(&e.name))
+    {
+        return Ok(Some(Unsupported::OtherArchive));
     }
     if let [only] = listed
         && !only.is_dir

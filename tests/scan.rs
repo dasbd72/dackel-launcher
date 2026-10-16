@@ -81,3 +81,33 @@ fn missing_library_is_an_error_not_an_empty_list() {
 
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
 }
+
+#[test]
+fn an_imported_zip_needs_extracting_and_an_imported_other_archive_is_unsupported() {
+    use dackel_launcher::extract::{Status, Unsupported, status};
+    use dackel_launcher::import::{Policy, import};
+
+    let downloads = tempfile::tempdir().unwrap();
+    let lib = tempfile::tempdir().unwrap();
+    let zip = downloads.path().join("RJ111111.zip");
+    let rar = downloads.path().join("RJ222222.rar");
+    fs::write(&zip, "zip").unwrap();
+    fs::write(&rar, "rar").unwrap();
+
+    import(
+        lib.path(),
+        &[(zip, "RJ111111".to_owned()), (rar, "RJ222222".to_owned())],
+        Policy::Skip,
+    );
+
+    let games = scan(lib.path()).unwrap();
+    let state = |id: &str| {
+        let game = games.iter().find(|g| g.id == id).unwrap();
+        status(&game.dir).unwrap()
+    };
+    assert_eq!(state("RJ111111"), Status::NotExtracted);
+    assert_eq!(
+        state("RJ222222"),
+        Status::ExtractManually(Unsupported::OtherArchive)
+    );
+}
