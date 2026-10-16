@@ -249,3 +249,19 @@ fn exported_game_exe_in_start_sh_is_used_as_a_hint() {
         }
     );
 }
+
+mod steam_icon {
+    use dackel_launcher::profile::{read_steam_icon, set_favorite, set_steam_icon};
+    use dackel_launcher::steam_art::IconSource;
+
+    #[test]
+    fn the_steam_icon_defaults_to_the_cover_and_is_remembered() {
+        let game = tempfile::tempdir().unwrap();
+        assert_eq!(read_steam_icon(game.path()).unwrap(), IconSource::Cover);
+
+        set_steam_icon(game.path(), IconSource::Exe).unwrap();
+        set_favorite(game.path(), true).unwrap();
+
+        assert_eq!(read_steam_icon(game.path()).unwrap(), IconSource::Exe);
+    }
+}

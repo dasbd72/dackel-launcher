@@ -33,6 +33,7 @@ use dackel_launcher::proton::{self, ProtonChoice};
 use dackel_launcher::reload::Infos;
 use dackel_launcher::settings::{self, Settings};
 use dackel_launcher::steam::{self, LauncherState};
+use dackel_launcher::steam_art::{self, IconSource};
 use dackel_launcher::tuning::reset_prefix;
 use dackel_launcher::window::{self, RestoreStep, WindowCommand, WindowState};
 use details::{DetailsView, SteamChange, TuningEdit, details_ui, exe_choices, text_box};
@@ -789,6 +790,19 @@ impl App {
     /// Adds the game to Steam, or takes it out, and says what happened.
     fn set_steam_entry(&mut self, request: SteamRequest) {
         self.steam_cache.replace(None);
+        if request.change == SteamChange::ToggleIcon {
+            let next = match profile::read_steam_icon(&request.dir).unwrap_or_default() {
+                IconSource::Cover => IconSource::Exe,
+                IconSource::Exe => IconSource::Cover,
+            };
+            if let Err(err) = profile::set_steam_icon(&request.dir, next) {
+                self.message = Some(format!("Could not save the icon choice: {err}"));
+                return;
+            }
+            if let Some(edit) = self.tuning_edit.as_mut() {
+                edit.steam_icon = next;
+            }
+        }
         self.message = Some(match self.write_steam_entry(&request) {
             Ok(done) => done,
             Err(err) => format!("Steam: {err}"),
@@ -799,18 +813,38 @@ impl App {
         let (root, path, account) = self.steam_shortcuts()?;
         let mut shortcuts = steam::load_shortcuts(&path)?;
         let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
-        let mut note = String::new();
         let grid = steam::grid_dir(&root, &account);
+        let mut note = String::new();
+        // Writes the images of the game's entry and points its icon at the written file.
+        let mut art = |shortcuts: &mut steam::Value, app_id: u32, required: bool| {
+            let Some(cover) = &request.cover else {
+                return if required {
+                    Err("this game has no cover".to_owned())
+                } else {
+                    note = " (no cover, so no images)".to_owned();
+                    Ok(())
+                };
+            };
+            let wanted = profile::read_steam_icon(&request.dir).unwrap_or_default();
+            let used =
+                steam_art::write_game_art(&grid, app_id, cover, wanted, request.exe.as_deref())
+                    .map_err(|e| format!("could not write the images: {e}"))?;
+            if wanted == IconSource::Exe && used == IconSource::Cover {
+                note = " (no icon found in the exe; used the cover)".to_owned();
+            }
+            steam::set_game_icon(
+                shortcuts,
+                &request.dir,
+                &grid.join(format!("{app_id}_icon.png")),
+            );
+            Ok(())
+        };
         let verb = match request.change {
             SteamChange::Add => {
                 let app_id =
                     steam::add_game(&mut shortcuts, &launcher, &request.dir, &request.title)?;
                 steam::refresh_launcher(&mut shortcuts, &launcher);
-                if let Some(cover) = &request.cover
-                    && let Err(err) = steam::write_grid(cover, &grid, app_id)
-                {
-                    note = format!(" (no cover image: {err})");
-                }
+                art(&mut shortcuts, app_id, false)?;
                 "Added"
             }
             SteamChange::Remove => {
@@ -819,17 +853,11 @@ impl App {
                 }
                 "Removed"
             }
-            SteamChange::Images => {
+            SteamChange::Images | SteamChange::ToggleIcon => {
                 let app_id = steam::app_id_of(&shortcuts, &request.dir)
                     .ok_or("this game has no Steam entry")?;
-                let cover = request.cover.as_deref().ok_or("this game has no cover")?;
-                steam::write_grid(cover, &grid, app_id)
-                    .map_err(|e| format!("could not write the image: {e}"))?;
-                // Only the images changed, so the shortcuts file stays as it is.
-                return Ok(format!(
-                    "Updated the Steam image of {}; restart Steam to see it",
-                    request.title
-                ));
+                art(&mut shortcuts, app_id, true)?;
+                "Updated the images of"
             }
         };
         steam::save_shortcuts(&path, &shortcuts).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -1964,6 +1992,10 @@ impl eframe::App for App {
                         dir: entry.game.dir.clone(),
                         title: info.map_or_else(|| entry.game.id.clone(), |i| i.title.clone()),
                         cover: cover_for_steam,
+                        exe: match &entry.state {
+                            Ok(ExeState::Ready { exe }) => Some(entry.game.dir.join(exe)),
+                            _ => None,
+                        },
                         change,
                     });
                 }
@@ -2402,6 +2434,8 @@ struct SteamRequest {
     dir: PathBuf,
     title: String,
     cover: Option<PathBuf>,
+    /// The game's exe, for its icon.
+    exe: Option<PathBuf>,
     change: SteamChange,
 }
 

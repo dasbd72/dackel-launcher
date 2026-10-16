@@ -94,6 +94,8 @@ pub enum Control {
     SteamEntry,
     /// Writes the game's cover into Steam again.
     SteamImages,
+    /// Switches the game's Steam icon between the cover and the exe's icon.
+    SteamIconSource,
     // Launch options on the details page.
     LaunchOptions,
     EnvBox,

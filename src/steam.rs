@@ -4,7 +4,7 @@
 //! testable without Steam. The entries are the launcher's own when their launch options are
 //! `--launch "<game folder>"`; nothing else in the file is ever changed.
 
-use crate::vdf::Value;
+pub use crate::vdf::Value;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -265,6 +265,22 @@ pub fn remove_launcher(root: &mut Value) -> bool {
         *key = i.to_string();
     }
     list.len() != before
+}
+
+/// Sets the icon of a game's entry. False when the game has no entry or it already has it.
+pub fn set_game_icon(root: &mut Value, game_dir: &Path, icon: &Path) -> bool {
+    let icon = icon.to_string_lossy().into_owned();
+    for (_, entry) in list_mut(root).iter_mut() {
+        if game_of(entry).as_deref() != Some(game_dir) {
+            continue;
+        }
+        if entry.get("icon").and_then(Value::as_str) == Some(&icon) {
+            return false;
+        }
+        set(entry, "icon", Value::Str(icon));
+        return true;
+    }
+    false
 }
 
 /// The app id of a game's entry, if it has one.

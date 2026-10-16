@@ -12,7 +12,12 @@ The details page of a game has **Add to Steam** / **Remove from Steam** when Ste
 - **`--launch <game folder>`:** starts the game with its saved Proton and launch options, with no
   window, and stays until the game ends so Steam and the play time see it. A game with several
   programs and none chosen must be chosen in the launcher first.
-- **Cover:** copied into the account's `grid` folder as `<appid>.png` and `<appid>p.png`.
+- **Images:** the cover is copied into the account's `grid` folder as the wide and portrait capsules
+  (`<appid>.png`, `<appid>p.png`), a soft blurred version of it becomes the hero (`<appid>_hero.png`),
+  and the icon (`<appid>_icon.png`, also set as the shortcut's icon) is either the middle of the cover
+  cropped square or the application icon read from the game's exe. The details page's **Icon:** button
+  switches between the two (remembered per game); a game whose exe has no icon uses the cover. **Update
+  Steam image** writes them again.
 - **Steam running:** the file is still written, but Steam may overwrite it when it exits.
   Restart Steam to see the entry, and add entries with Steam closed to be safe.
 - **Moving the launcher:** adding any entry rewrites the program path of all our entries.

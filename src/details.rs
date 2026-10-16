@@ -11,6 +11,7 @@ use dackel_launcher::nav::Control;
 use dackel_launcher::pickers::AUTOMATIC_PROTON;
 use dackel_launcher::profile::{self, Stats};
 use dackel_launcher::proton;
+use dackel_launcher::steam_art::IconSource;
 use dackel_launcher::tuning::{format_env, parse_env, split_args, winetricks_command};
 use eframe::egui;
 use std::collections::BTreeMap;
@@ -39,6 +40,8 @@ pub struct TuningEdit {
     pub proton_versions: Vec<String>,
     /// The Proton version chosen for this game; `None` is automatic.
     pub pin: Option<String>,
+    /// Where the game's Steam icon comes from.
+    pub steam_icon: IconSource,
     /// The section is unfolded.
     open: bool,
     /// A text box has keyboard focus, so the pad's B and up/down leave it instead of acting
@@ -61,6 +64,7 @@ impl TuningEdit {
             confirm_reset: false,
             proton_versions: proton::selectable(&proton::compat_dir()).unwrap_or_default(),
             pin: tuning.proton,
+            steam_icon: profile::read_steam_icon(game_dir).unwrap_or_default(),
             open: false,
             typing: false,
             leave: false,
@@ -98,6 +102,8 @@ pub enum SteamChange {
     Remove,
     /// Write the cover into Steam again.
     Images,
+    /// Switch the icon between the cover and the exe's, then write the images again.
+    ToggleIcon,
 }
 
 #[derive(Default)]
@@ -367,6 +373,16 @@ pub fn details_ui(
                                 let response = ui.button("Update Steam image");
                                 if frame.pressed(ui, Control::SteamImages, &response, true) {
                                     action.steam = Some(SteamChange::Images);
+                                }
+                                let label = match edit.steam_icon {
+                                    IconSource::Cover => "Icon: cover",
+                                    IconSource::Exe => "Icon: exe",
+                                };
+                                let response = ui
+                                    .button(label)
+                                    .on_hover_text("Where the Steam icon comes from");
+                                if frame.pressed(ui, Control::SteamIconSource, &response, true) {
+                                    action.steam = Some(SteamChange::ToggleIcon);
                                 }
                             }
                         }

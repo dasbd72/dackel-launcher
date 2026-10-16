@@ -1,5 +1,6 @@
 use crate::exe::{find_candidates, legacy_hint, pick};
 use crate::library::META_DIR;
+use crate::steam_art::IconSource;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io;
@@ -31,6 +32,9 @@ struct Profile {
     /// Extra command-line arguments, as the user typed them.
     #[serde(default)]
     args: String,
+    /// Where the game's Steam icon comes from.
+    #[serde(default)]
+    steam_icon: IconSource,
     /// Name of the Proton version chosen for the game (e.g. `GE-Proton9-27`); none means automatic.
     #[serde(default)]
     proton: Option<String>,
@@ -60,6 +64,14 @@ pub fn set_tuning(game_dir: &Path, env: BTreeMap<String, String>, args: &str) ->
         p.env = env;
         p.args = args.to_owned();
     })
+}
+
+pub fn read_steam_icon(game_dir: &Path) -> io::Result<IconSource> {
+    Ok(read_profile(game_dir)?.unwrap_or_default().steam_icon)
+}
+
+pub fn set_steam_icon(game_dir: &Path, icon: IconSource) -> io::Result<()> {
+    update_profile(game_dir, |p| p.steam_icon = icon)
 }
 
 /// Pins (or, with `None`, unpins) the Proton version for this game.

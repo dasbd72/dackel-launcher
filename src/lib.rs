@@ -22,6 +22,7 @@ pub mod proton;
 pub mod reload;
 pub mod settings;
 pub mod steam;
+pub mod steam_art;
 pub mod steam_input;
 pub mod tuning;
 pub mod umu;

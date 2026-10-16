@@ -502,3 +502,39 @@ mod launcher_art {
         assert_eq!(set_launcher_icon(&mut root, Path::new("/grid/icon.png")), 0);
     }
 }
+
+mod game_icon {
+    use super::*;
+    use dackel_launcher::steam::set_game_icon;
+
+    #[test]
+    fn a_games_icon_is_set_on_its_entry_only() {
+        let mut root = with_users_own();
+        add_game(&mut root, &launcher(), Path::new("/games/RJ1"), "One").unwrap();
+        add_game(&mut root, &launcher(), Path::new("/games/RJ2"), "Two").unwrap();
+
+        assert!(set_game_icon(
+            &mut root,
+            Path::new("/games/RJ1"),
+            Path::new("/grid/1_icon.png")
+        ));
+
+        let all = entries(&root);
+        assert_eq!(text(all[1], "icon"), "/grid/1_icon.png");
+        assert_eq!(text(all[2], "icon"), "");
+        assert!(all[0].get("icon").is_none());
+        assert!(
+            !set_game_icon(
+                &mut root,
+                Path::new("/games/RJ1"),
+                Path::new("/grid/1_icon.png")
+            ),
+            "already set"
+        );
+        assert!(!set_game_icon(
+            &mut root,
+            Path::new("/games/none"),
+            Path::new("/x.png")
+        ));
+    }
+}
