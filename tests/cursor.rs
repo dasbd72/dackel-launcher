@@ -368,3 +368,81 @@ fn the_libraries_window_pulls_focus_onto_its_own_controls_once_drawn() {
     cursor.keep_on_page(Page::Libraries);
     assert_eq!(cursor.control(), Some(Control::LibraryClose));
 }
+
+mod scrolled_grid {
+    use super::*;
+
+    /// A toolbar button at the top of the screen, and a grid of three rows of two tiles that
+    /// is scrolled so the first row is above the screen (negative y) and two rows are shown.
+    fn scrolled() -> Vec<Slot> {
+        vec![
+            control(Control::Sort, 0.0, 10.0),
+            game("a", 0.0, -300.0),
+            game("b", 100.0, -300.0),
+            game("c", 0.0, 100.0),
+            game("d", 100.0, 100.0),
+            game("e", 0.0, 400.0),
+            game("f", 100.0, 400.0),
+        ]
+    }
+
+    fn on(id: &str) -> Cursor {
+        let mut cursor = Cursor::new();
+        cursor.select_game(id.to_owned());
+        cursor.end_frame(scrolled());
+        cursor
+    }
+
+    #[test]
+    fn up_goes_to_the_row_above_even_when_it_is_scrolled_off_screen() {
+        let mut cursor = on("d");
+
+        cursor.move_toward(Dir::Up);
+
+        assert_eq!(cursor.game(), Some("b"));
+        assert_eq!(cursor.control(), None);
+    }
+
+    #[test]
+    fn up_from_the_first_row_reaches_the_toolbar() {
+        // Not scrolled: the first row is just below the toolbar.
+        let mut cursor = Cursor::new();
+        cursor.select_game("b".to_owned());
+        cursor.end_frame(vec![
+            control(Control::Sort, 0.0, 10.0),
+            game("a", 0.0, 100.0),
+            game("b", 100.0, 100.0),
+            game("c", 0.0, 400.0),
+        ]);
+
+        cursor.move_toward(Dir::Up);
+
+        assert_eq!(cursor.control(), Some(Control::Sort));
+    }
+
+    #[test]
+    fn down_goes_to_the_next_row_in_the_same_column() {
+        let mut cursor = on("c");
+
+        cursor.move_toward(Dir::Down);
+
+        assert_eq!(cursor.game(), Some("e"));
+        cursor.move_toward(Dir::Down);
+        assert_eq!(cursor.game(), Some("e"), "nothing below the last row");
+    }
+
+    #[test]
+    fn a_short_last_row_is_entered_at_the_nearest_column() {
+        let mut cursor = Cursor::new();
+        cursor.select_game("d".to_owned());
+        cursor.end_frame(vec![
+            game("c", 0.0, 100.0),
+            game("d", 100.0, 100.0),
+            game("e", 0.0, 400.0),
+        ]);
+
+        cursor.move_toward(Dir::Down);
+
+        assert_eq!(cursor.game(), Some("e"));
+    }
+}

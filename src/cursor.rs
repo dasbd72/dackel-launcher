@@ -121,6 +121,14 @@ impl Cursor {
     /// first move lands on the first thing drawn, so the controller can always reach the
     /// toolbar.
     pub fn move_toward(&mut self, dir: Dir) {
+        if self.control.is_none()
+            && let Some(id) = self.game_next_to(dir)
+        {
+            self.game = Some(id);
+            self.auto = false;
+            self.scroll = true;
+            return;
+        }
         let current = match (&self.control, &self.game) {
             (Some(c), _) => Some(Target::Control(*c)),
             (None, Some(id)) => Some(Target::Game(id.clone())),
@@ -153,6 +161,50 @@ impl Cursor {
     pub fn focus(&mut self, control: Control) {
         self.control = Some(control);
         self.scroll = true;
+    }
+
+    /// The game one row up or down from the cursor, in the column nearest to it, whether or
+    /// not that row is on screen. Screen distance would skip rows scrolled out of view in
+    /// favour of the toolbar. `None` for any other direction, when the cursor is not on a
+    /// drawn tile, or when there is no row that way (so the move falls back to the screen:
+    /// up from the first row reaches the toolbar).
+    fn game_next_to(&self, dir: Dir) -> Option<String> {
+        if !matches!(dir, Dir::Up | Dir::Down) {
+            return None;
+        }
+        let tiles: Vec<(&String, &Bounds)> = self
+            .slots
+            .iter()
+            .filter_map(|slot| match &slot.target {
+                Target::Game(id) => Some((id, &slot.bounds)),
+                Target::Control(_) => None,
+            })
+            .collect();
+        // Tiles come in drawing order, so a row is a run of tiles with the same top.
+        let mut rows: Vec<Vec<(&String, &Bounds)>> = Vec::new();
+        for tile in tiles {
+            match rows.last_mut() {
+                Some(row) if (row[0].1.top - tile.1.top).abs() < 1.0 => row.push(tile),
+                _ => rows.push(vec![tile]),
+            }
+        }
+        let current = self.game.as_ref()?;
+        let at = rows
+            .iter()
+            .position(|row| row.iter().any(|(id, _)| *id == current))?;
+        let here = rows[at].iter().find(|(id, _)| *id == current)?.1;
+        let next = match dir {
+            Dir::Up => at.checked_sub(1)?,
+            _ => at + 1,
+        };
+        let x = (here.left + here.right) / 2.0;
+        rows.get(next)?
+            .iter()
+            .min_by(|a, b| {
+                let away = |t: &(&String, &Bounds)| ((t.1.left + t.1.right) / 2.0 - x).abs();
+                away(a).total_cmp(&away(b))
+            })
+            .map(|(id, _)| (*id).clone())
     }
 
     /// The user picked a game tile directly (a click).
