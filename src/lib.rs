@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod atomic;
 pub mod blur;
 pub mod browse;
 pub mod cli;

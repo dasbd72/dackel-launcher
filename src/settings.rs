@@ -58,7 +58,7 @@ pub fn save(path: &Path, settings: &Settings) -> io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let json = serde_json::to_vec_pretty(settings).map_err(io::Error::other)?;
-    std::fs::write(path, json)
+    crate::atomic::write(path, json)
 }
 
 /// `$XDG_CONFIG_HOME/dackel-launcher/settings.json`, else `~/.config/...`.

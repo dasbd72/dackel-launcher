@@ -210,7 +210,7 @@ fn write_profile(game_dir: &Path, profile: &Profile) -> io::Result<()> {
     let dir = game_dir.join(META_DIR);
     std::fs::create_dir_all(&dir)?;
     let json = serde_json::to_vec_pretty(profile).map_err(io::Error::other)?;
-    std::fs::write(dir.join(PROFILE_FILE), json)
+    crate::atomic::write(&dir.join(PROFILE_FILE), json)
 }
 
 /// Records the user's exe choice. `exe` must be one of the detected candidates.
