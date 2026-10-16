@@ -141,6 +141,11 @@ pub fn add_library(listed: &[PathBuf], typed: &str) -> Result<PathBuf, AddLibrar
     Ok(real)
 }
 
+/// The folder the browser opens in: the home folder, or the root when home is unknown.
+pub fn browser_start(home: Option<&Path>) -> PathBuf {
+    home.map_or_else(|| PathBuf::from("/"), Path::to_path_buf)
+}
+
 /// The libraries to scan: the list with repeats dropped, the first of each kept. Two
 /// spellings of one folder (a trailing slash, a symlink) count as the same folder.
 pub fn unique_roots(roots: &[PathBuf]) -> Vec<PathBuf> {

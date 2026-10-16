@@ -132,10 +132,24 @@ impl LibraryList {
     /// Adds the typed folder. On success it is listed, the box is emptied and the folder is
     /// returned; otherwise the reason is kept to show beside the box.
     pub fn add_typed(&mut self) -> Result<PathBuf, AddLibraryError> {
-        match add_library(&self.roots, &self.input) {
+        let typed = std::mem::take(&mut self.input);
+        let result = self.add(&typed);
+        if result.is_err() {
+            self.input = typed;
+        }
+        result
+    }
+
+    /// Adds a folder chosen in the browser, through the same check as a typed path. The
+    /// typed text is left alone.
+    pub fn add_picked(&mut self, folder: &Path) -> Result<PathBuf, AddLibraryError> {
+        self.add(&folder.to_string_lossy())
+    }
+
+    fn add(&mut self, text: &str) -> Result<PathBuf, AddLibraryError> {
+        match add_library(&self.roots, text) {
             Ok(path) => {
                 self.roots.push(path.clone());
-                self.input.clear();
                 self.error = None;
                 Ok(path)
             }

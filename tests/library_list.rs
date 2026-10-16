@@ -200,3 +200,41 @@ fn the_folder_beside_the_program_and_unknown_slots_cannot_be_removed() {
     assert_eq!(list.count(), 2);
     assert_eq!(list.filter(), Some(1));
 }
+
+#[test]
+fn a_picked_folder_is_checked_like_the_same_typed_path() {
+    let d = dirs();
+    let mut list = list_of(&d, &[&d.a]);
+
+    assert_eq!(list.add_picked(&d.b), Ok(d.b.clone()));
+    assert_eq!(list.roots(), [d.beside.clone(), d.a.clone(), d.b.clone()]);
+    assert_eq!(list.add_picked(&d.a), Err(AddLibraryError::AlreadyListed));
+    assert_eq!(list.error(), Some("That library is already in the list."));
+    assert_eq!(
+        list.add_picked(&d.b.join("missing")),
+        Err(AddLibraryError::NotFound)
+    );
+}
+
+#[test]
+fn picking_leaves_the_typed_text_alone() {
+    let d = dirs();
+    let mut list = list_of(&d, &[]);
+    *list.input_mut() = "half a pa".to_owned();
+
+    assert!(list.add_picked(&d.a).is_ok());
+
+    assert_eq!(list.input_mut(), "half a pa");
+}
+
+#[test]
+fn the_browser_starts_at_home_or_else_the_root() {
+    use dackel_launcher::library::browser_start;
+    use std::path::{Path, PathBuf};
+
+    assert_eq!(
+        browser_start(Some(Path::new("/home/me"))),
+        PathBuf::from("/home/me")
+    );
+    assert_eq!(browser_start(None), PathBuf::from("/"));
+}

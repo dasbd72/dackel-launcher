@@ -13,7 +13,9 @@ use dackel_launcher::fonts;
 use dackel_launcher::info::{GameInfo, cover_path, load};
 use dackel_launcher::jobs::{Cancelled, ExtractJob, JobStatus, Jobs, OverwriteCheck};
 use dackel_launcher::launch::{Launcher, UmuSpawner, unix_now};
-use dackel_launcher::library::{Game, Store, library_labels, resolve_library, scan_all, store_of};
+use dackel_launcher::library::{
+    Game, Store, browser_start, library_labels, resolve_library, scan_all, store_of,
+};
 use dackel_launcher::library_list::LibraryList;
 use dackel_launcher::nav::{
     self, Command, Context, Control, DEBOUNCE_PRESETS_MS, DEFAULT_DEBOUNCE_MS, Input,
@@ -32,6 +34,7 @@ use dackel_launcher::tuning::reset_prefix;
 use dackel_launcher::window::{self, RestoreStep, WindowCommand, WindowState};
 use details::{DetailsView, TuningEdit, details_ui, exe_choices};
 use eframe::egui;
+use egui_file_dialog::{FileDialog, OpeningMode};
 use focus::{FocusFrame, Item, bounds};
 use icons::{Icon, icon_button};
 use std::collections::HashSet;
@@ -228,6 +231,8 @@ enum PromptOption {
 struct App {
     /// The libraries in use, which could not be read, the filter and the "add a folder" form.
     libraries: LibraryList,
+    /// The folder browser opened by "Browse..." in the Libraries window.
+    browser: FileDialog,
     /// The popup that is open, if any.
     popup: Option<Popup>,
     /// How far down the details page is scrolled, in points.
@@ -269,6 +274,13 @@ impl App {
         startup.settings.libraries = added;
         let mut app = App {
             libraries,
+            browser: FileDialog::new()
+                .title("Add a library folder")
+                .opening_mode(OpeningMode::AlwaysInitialDir)
+                .initial_directory(browser_start(
+                    std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+                ))
+                .show_new_folder_button(false),
             popup: None,
             details_scroll: 0.0,
             tuning_edit: None,
@@ -946,6 +958,7 @@ impl App {
     fn libraries_window(&mut self, ctx: &egui::Context) {
         let mut remove: Option<usize> = None;
         let mut add = false;
+        let mut browse = false;
         let mut close = false;
         let rows: Vec<(usize, PathBuf, bool)> = self
             .libraries
@@ -990,6 +1003,9 @@ impl App {
                     if ui.button("Add").clicked() || enter {
                         add = true;
                     }
+                    if ui.button("Browse...").clicked() {
+                        browse = true;
+                    }
                 });
                 if let Some(err) = &error {
                     ui.colored_label(egui::Color32::LIGHT_RED, err);
@@ -998,7 +1014,16 @@ impl App {
                     close = true;
                 }
             });
-        if add && let Ok(path) = self.libraries.add_typed() {
+        if browse {
+            self.browser.pick_directory();
+        }
+        self.browser.update(ctx);
+        let picked = self
+            .browser
+            .take_picked()
+            .map(|p| self.libraries.add_picked(&p));
+        let typed = add.then(|| self.libraries.add_typed());
+        for path in [picked, typed].into_iter().flatten().flatten() {
             self.settings.libraries.push(path);
             self.save_settings();
             self.rescan();
