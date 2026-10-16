@@ -258,6 +258,8 @@ struct App {
     steam_root: Option<PathBuf>,
     /// Whether the game on the details page has a Steam entry (game folder, answer).
     steam_cache: std::cell::RefCell<Option<(PathBuf, bool)>>,
+    /// Steam file and image work running in the background, and its result.
+    steam_job: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// What Steam has for the launcher itself.
     launcher_cache: std::cell::Cell<Option<LauncherState>>,
     /// A text box of the Libraries window has the keyboard; the pad's B and up/down leave it.
@@ -309,6 +311,7 @@ impl App {
                 .and_then(|home| steam::steam_root(Path::new(&home))),
             steam_cache: std::cell::RefCell::new(None),
             launcher_cache: std::cell::Cell::new(None),
+            steam_job: None,
             library_typing: false,
             library_leave: false,
             browser: FileDialog::new()
@@ -711,11 +714,7 @@ impl App {
 
     /// The account's shortcuts file to change, with its Steam folder and account name.
     fn steam_shortcuts(&self) -> Result<(PathBuf, PathBuf, String), String> {
-        let root = self.steam_root.clone().ok_or("Steam was not found")?;
-        let account = steam::account_with_newest(&steam::accounts(&root))
-            .ok_or("no Steam account was found")?;
-        let path = steam::shortcuts_path(&root, &account);
-        Ok((root, path, account))
+        steam_shortcuts_in(&self.steam_root)
     }
 
     /// What Steam has for the launcher; `None` when Steam was not found.
@@ -736,60 +735,54 @@ impl App {
         Some(state)
     }
 
-    /// Adds, updates or removes the launcher's own shortcut, and says what happened.
+    /// Adds, updates or removes the launcher's own shortcut in the background.
     fn change_launcher_in_steam(&mut self, change: LauncherChange) {
-        self.launcher_cache.set(None);
-        let done = (|| {
-            let (_, path, account) = self.steam_shortcuts()?;
-            let mut shortcuts = steam::load_shortcuts(&path)?;
-            let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
-            let (root, _, _) = self.steam_shortcuts()?;
-            let grid = steam::grid_dir(&root, &account);
-            let verb = match change {
-                LauncherChange::Add => {
-                    if !steam::add_launcher(&mut shortcuts, &launcher).1 {
-                        return Ok("Dackel Launcher is already in Steam".to_owned());
-                    }
-                    "Added"
-                }
-                LauncherChange::Update => {
-                    steam::update_launcher(&mut shortcuts, &launcher);
-                    "Updated"
-                }
-                LauncherChange::Remove => {
-                    if !steam::remove_launcher(&mut shortcuts) {
-                        return Ok("Dackel Launcher is not in Steam".to_owned());
-                    }
-                    "Removed"
-                }
-            };
-            if change != LauncherChange::Remove {
-                for id in steam::launcher_app_ids(&shortcuts) {
-                    steam::write_launcher_art(&grid, id)
-                        .map_err(|e| format!("could not write the images: {e}"))?;
-                    steam::set_launcher_icon(
-                        &mut shortcuts,
-                        &grid.join(steam::launcher_icon_name(id)),
-                    );
-                }
+        let root = self.steam_root.clone();
+        self.spawn_steam("Updating Steam...", move || change_launcher(&root, change));
+    }
+
+    /// Runs Steam file and image work off the UI thread: writing the images takes a moment.
+    fn spawn_steam(
+        &mut self,
+        working: &str,
+        work: impl FnOnce() -> Result<String, String> + Send + 'static,
+    ) {
+        if self.steam_job.is_some() {
+            self.message = Some("Steam is still being updated".to_owned());
+            return;
+        }
+        self.message = Some(working.to_owned());
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let repaint = self.repaint.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(work());
+            if let Some(ctx) = repaint {
+                ctx.request_repaint();
             }
-            steam::save_shortcuts(&path, &shortcuts)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-            let restart = if steam::steam_running(Path::new("/proc")) {
-                "; restart Steam to see it"
-            } else {
-                ""
-            };
-            Ok::<_, String>(format!(
-                "{verb} Dackel Launcher in Steam (account {account}){restart}"
-            ))
-        })();
+        });
+        self.steam_job = Some(receiver);
+    }
+
+    /// Takes the result of the Steam work, once it is done.
+    fn poll_steam(&mut self) {
+        let Some(receiver) = &self.steam_job else {
+            return;
+        };
+        let done = match receiver.try_recv() {
+            Ok(done) => done,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("the work stopped unexpectedly".to_owned())
+            }
+        };
+        self.steam_job = None;
+        self.steam_cache.replace(None);
+        self.launcher_cache.set(None);
         self.message = Some(done.unwrap_or_else(|err| format!("Steam: {err}")));
     }
 
     /// Adds the game to Steam, or takes it out, and says what happened.
     fn set_steam_entry(&mut self, request: SteamRequest) {
-        self.steam_cache.replace(None);
         if request.change == SteamChange::ToggleIcon {
             let next = match profile::read_steam_icon(&request.dir).unwrap_or_default() {
                 IconSource::Cover => IconSource::Exe,
@@ -803,73 +796,10 @@ impl App {
                 edit.steam_icon = next;
             }
         }
-        self.message = Some(match self.write_steam_entry(&request) {
-            Ok(done) => done,
-            Err(err) => format!("Steam: {err}"),
+        let root = self.steam_root.clone();
+        self.spawn_steam("Updating Steam...", move || {
+            write_steam_entry(&root, &request)
         });
-    }
-
-    fn write_steam_entry(&self, request: &SteamRequest) -> Result<String, String> {
-        let (root, path, account) = self.steam_shortcuts()?;
-        let mut shortcuts = steam::load_shortcuts(&path)?;
-        let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
-        let grid = steam::grid_dir(&root, &account);
-        let mut note = String::new();
-        // Writes the images of the game's entry and points its icon at the written file.
-        let mut art = |shortcuts: &mut steam::Value, app_id: u32, required: bool| {
-            let Some(cover) = &request.cover else {
-                return if required {
-                    Err("this game has no cover".to_owned())
-                } else {
-                    note = " (no cover, so no images)".to_owned();
-                    Ok(())
-                };
-            };
-            let wanted = profile::read_steam_icon(&request.dir).unwrap_or_default();
-            let used =
-                steam_art::write_game_art(&grid, app_id, cover, wanted, request.exe.as_deref())
-                    .map_err(|e| format!("could not write the images: {e}"))?;
-            if wanted == IconSource::Exe && used == IconSource::Cover {
-                note = " (no icon found in the exe; used the cover)".to_owned();
-            }
-            steam::set_game_icon(
-                shortcuts,
-                &request.dir,
-                &grid.join(format!("{app_id}_icon.png")),
-            );
-            Ok(())
-        };
-        let verb = match request.change {
-            SteamChange::Add => {
-                let app_id =
-                    steam::add_game(&mut shortcuts, &launcher, &request.dir, &request.title)?;
-                steam::refresh_launcher(&mut shortcuts, &launcher);
-                art(&mut shortcuts, app_id, false)?;
-                "Added"
-            }
-            SteamChange::Remove => {
-                if !steam::remove_game(&mut shortcuts, &request.dir) {
-                    return Ok(format!("{} has no Steam entry", request.title));
-                }
-                "Removed"
-            }
-            SteamChange::Images | SteamChange::ToggleIcon => {
-                let app_id = steam::app_id_of(&shortcuts, &request.dir)
-                    .ok_or("this game has no Steam entry")?;
-                art(&mut shortcuts, app_id, true)?;
-                "Updated the images of"
-            }
-        };
-        steam::save_shortcuts(&path, &shortcuts).map_err(|e| format!("{}: {e}", path.display()))?;
-        let restart = if steam::steam_running(Path::new("/proc")) {
-            "; restart Steam to see it"
-        } else {
-            ""
-        };
-        Ok(format!(
-            "{verb} {} in Steam (account {account}){note}{restart}",
-            request.title
-        ))
     }
 
     fn toggle_favorite(&mut self, id: &str) {
@@ -1654,6 +1584,7 @@ impl eframe::App for App {
             self.repaint = Some(ctx.clone());
         }
         self.poll_extractions();
+        self.poll_steam();
         if self.jobs.any() {
             // Backstop in case a wake-up is missed.
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -2437,6 +2368,120 @@ struct SteamRequest {
     /// The game's exe, for its icon.
     exe: Option<PathBuf>,
     change: SteamChange,
+}
+
+fn change_launcher(steam_root: &Option<PathBuf>, change: LauncherChange) -> Result<String, String> {
+    let (root, path, account) = steam_shortcuts_in(steam_root)?;
+    let mut shortcuts = steam::load_shortcuts(&path)?;
+    let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
+    let grid = steam::grid_dir(&root, &account);
+    let verb = match change {
+        LauncherChange::Add => {
+            if !steam::add_launcher(&mut shortcuts, &launcher).1 {
+                return Ok("Dackel Launcher is already in Steam".to_owned());
+            }
+            "Added"
+        }
+        LauncherChange::Update => {
+            steam::update_launcher(&mut shortcuts, &launcher);
+            "Updated"
+        }
+        LauncherChange::Remove => {
+            if !steam::remove_launcher(&mut shortcuts) {
+                return Ok("Dackel Launcher is not in Steam".to_owned());
+            }
+            "Removed"
+        }
+    };
+    if change != LauncherChange::Remove {
+        for id in steam::launcher_app_ids(&shortcuts) {
+            steam::write_launcher_art(&grid, id)
+                .map_err(|e| format!("could not write the images: {e}"))?;
+            steam::set_launcher_icon(&mut shortcuts, &grid.join(steam::launcher_icon_name(id)));
+        }
+    }
+    steam::save_shortcuts(&path, &shortcuts).map_err(|e| format!("{}: {e}", path.display()))?;
+    let restart = if steam::steam_running(Path::new("/proc")) {
+        "; restart Steam to see it"
+    } else {
+        ""
+    };
+    Ok(format!(
+        "{verb} Dackel Launcher in Steam (account {account}){restart}"
+    ))
+}
+
+/// The account's shortcuts file to change, with Steam's folder and the account name.
+fn steam_shortcuts_in(steam_root: &Option<PathBuf>) -> Result<(PathBuf, PathBuf, String), String> {
+    let root = steam_root.clone().ok_or("Steam was not found")?;
+    let account =
+        steam::account_with_newest(&steam::accounts(&root)).ok_or("no Steam account was found")?;
+    let path = steam::shortcuts_path(&root, &account);
+    Ok((root, path, account))
+}
+
+fn write_steam_entry(
+    steam_root: &Option<PathBuf>,
+    request: &SteamRequest,
+) -> Result<String, String> {
+    let (root, path, account) = steam_shortcuts_in(steam_root)?;
+    let mut shortcuts = steam::load_shortcuts(&path)?;
+    let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
+    let grid = steam::grid_dir(&root, &account);
+    let mut note = String::new();
+    // Writes the images of the game's entry and points its icon at the written file.
+    let mut art = |shortcuts: &mut steam::Value, app_id: u32, required: bool| {
+        let Some(cover) = &request.cover else {
+            return if required {
+                Err("this game has no cover".to_owned())
+            } else {
+                note = " (no cover, so no images)".to_owned();
+                Ok(())
+            };
+        };
+        let wanted = profile::read_steam_icon(&request.dir).unwrap_or_default();
+        let used = steam_art::write_game_art(&grid, app_id, cover, wanted, request.exe.as_deref())
+            .map_err(|e| format!("could not write the images: {e}"))?;
+        if wanted == IconSource::Exe && used == IconSource::Cover {
+            note = " (no icon found in the exe; used the cover)".to_owned();
+        }
+        steam::set_game_icon(
+            shortcuts,
+            &request.dir,
+            &grid.join(format!("{app_id}_icon.png")),
+        );
+        Ok(())
+    };
+    let verb = match request.change {
+        SteamChange::Add => {
+            let app_id = steam::add_game(&mut shortcuts, &launcher, &request.dir, &request.title)?;
+            steam::refresh_launcher(&mut shortcuts, &launcher);
+            art(&mut shortcuts, app_id, false)?;
+            "Added"
+        }
+        SteamChange::Remove => {
+            if !steam::remove_game(&mut shortcuts, &request.dir) {
+                return Ok(format!("{} has no Steam entry", request.title));
+            }
+            "Removed"
+        }
+        SteamChange::Images | SteamChange::ToggleIcon => {
+            let app_id =
+                steam::app_id_of(&shortcuts, &request.dir).ok_or("this game has no Steam entry")?;
+            art(&mut shortcuts, app_id, true)?;
+            "Updated the images of"
+        }
+    };
+    steam::save_shortcuts(&path, &shortcuts).map_err(|e| format!("{}: {e}", path.display()))?;
+    let restart = if steam::steam_running(Path::new("/proc")) {
+        "; restart Steam to see it"
+    } else {
+        ""
+    };
+    Ok(format!(
+        "{verb} {} in Steam (account {account}){note}{restart}",
+        request.title
+    ))
 }
 
 /// What the details page's Launch options asked for in one frame.

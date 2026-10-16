@@ -68,7 +68,7 @@ pub fn write_game_art(
 ) -> io::Result<IconSource> {
     write_grid(cover, grid_dir, app_id)?;
     let image = image::open(cover).map_err(io::Error::other)?;
-    save(&cover_hero(&image), grid_dir, &format!("{app_id}_hero.png"))?;
+    save_fast(&cover_hero(&image), grid_dir, &format!("{app_id}_hero.png"))?;
     let from_exe = match (icon, exe) {
         (IconSource::Exe, Some(exe)) => std::fs::read(exe)
             .ok()
@@ -85,4 +85,14 @@ pub fn write_game_art(
 
 fn save(picture: &DynamicImage, dir: &Path, name: &str) -> io::Result<()> {
     picture.save(dir.join(name)).map_err(io::Error::other)
+}
+
+/// Saves with the fastest PNG settings, for the large hero: it is soft, so it still shrinks well.
+fn save_fast(picture: &DynamicImage, dir: &Path, name: &str) -> io::Result<()> {
+    use image::codecs::png::{CompressionType, FilterType as PngFilter, PngEncoder};
+    let file = std::io::BufWriter::new(std::fs::File::create(dir.join(name))?);
+    let encoder = PngEncoder::new_with_quality(file, CompressionType::Fast, PngFilter::NoFilter);
+    picture
+        .write_with_encoder(encoder)
+        .map_err(io::Error::other)
 }
