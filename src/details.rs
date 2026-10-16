@@ -2,7 +2,7 @@
 
 use crate::covers::CoverView;
 use crate::focus::FocusFrame;
-use crate::icons::{Icon, chip, icon_text_button};
+use crate::icons::{Icon, chip, chip_rows, icon_text_button};
 use dackel_launcher::browse::format_play_time;
 use dackel_launcher::extract::{Progress, Status};
 use dackel_launcher::info::GameInfo;
@@ -19,6 +19,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const COVER_WIDTH: f32 = 420.0;
+
+/// Below this much room the cover goes above the info instead of beside it.
+const STACK_BELOW: f32 = 900.0;
 
 /// The label of an info row. The grid centers each cell vertically, so the label is centered
 /// too and lines up with its value, whether that is text or a chip.
@@ -164,6 +167,50 @@ pub fn exe_choices(
     chosen
 }
 
+/// The cover, `width` points wide, at the height its own aspect ratio gives it.
+fn draw_cover(ui: &mut egui::Ui, view: &DetailsView, width: f32) {
+    match (&view.cover_view, view.cover.as_ref()) {
+        // Blur is on: only ever the blurred copy, or an empty box while it is made.
+        (CoverView::Blurred(texture), _) => {
+            let aspect = texture
+                .as_ref()
+                .map_or(0.75, |t| t.size_vec2().y / t.size_vec2().x);
+            let size = egui::vec2(width, width * aspect);
+            match texture {
+                Some(texture) => {
+                    ui.add(
+                        egui::Image::new(texture)
+                            .fit_to_exact_size(size)
+                            .corner_radius(6.0),
+                    );
+                }
+                None => {
+                    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                    ui.painter()
+                        .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
+                }
+            }
+        }
+        (CoverView::Normal, Some(path)) => {
+            let uri = format!("file://{}", path.display());
+            ui.add(egui::Image::new(uri).max_width(width).corner_radius(6.0));
+        }
+        (CoverView::Normal, None) => {
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(width, width * 0.75), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "No cover",
+                egui::FontId::proportional(16.0),
+                ui.visuals().weak_text_color(),
+            );
+        }
+    }
+}
+
 pub fn details_ui(
     ui: &mut egui::Ui,
     view: &DetailsView,
@@ -197,216 +244,179 @@ pub fn details_ui(
         .auto_shrink([false, false])
         .vertical_scroll_offset(*scroll)
         .show(ui, |ui| {
-            ui.horizontal_top(|ui| {
-                // The cover takes the height its own aspect ratio gives it: no empty bands.
-                match (&view.cover_view, view.cover.as_ref()) {
-                    // Blur is on: only ever the blurred copy, or an empty box while it is made.
-                    (CoverView::Blurred(texture), _) => {
-                        let aspect = texture
-                            .as_ref()
-                            .map_or(0.75, |t| t.size_vec2().y / t.size_vec2().x);
-                        let size = egui::vec2(COVER_WIDTH, COVER_WIDTH * aspect);
-                        match texture {
-                            Some(texture) => {
-                                ui.add(
-                                    egui::Image::new(texture)
-                                        .fit_to_exact_size(size)
-                                        .corner_radius(6.0),
-                                );
+            // Narrow windows stack the cover over the info, so nothing is pushed past the edge.
+            let stacked = ui.available_width() < STACK_BELOW;
+            let cover_width = if stacked {
+                (ui.available_width() * 0.6).min(COVER_WIDTH)
+            } else {
+                COVER_WIDTH
+            };
+            let mut column = |ui: &mut egui::Ui| {
+                // Two columns, so every label lines up and so does every value.
+                egui::Grid::new("details-info")
+                    .num_columns(2)
+                    .spacing([16.0, 6.0])
+                    .show(ui, |ui| {
+                        if let Some(library) = &view.library {
+                            row_label(ui, "Library");
+                            ui.label(library);
+                            ui.end_row();
+                        }
+
+                        row_label(ui, "Circle");
+                        match view.info.and_then(|i| i.circle.as_deref()) {
+                            Some(circle) => chip(ui, circle),
+                            None => {
+                                ui.weak("--");
+                            }
+                        }
+                        ui.end_row();
+
+                        row_label(ui, "Tags");
+                        match view.info.map(|i| i.genres.as_slice()) {
+                            Some(genres) if !genres.is_empty() => chip_rows(ui, genres),
+                            _ => {
+                                ui.weak("--");
+                            }
+                        }
+                        ui.end_row();
+
+                        row_label(ui, "Play time");
+                        ui.label(format_play_time(view.stats.play_time_secs));
+                        ui.end_row();
+
+                        row_label(ui, "Exe");
+                        match view.exe {
+                            Some(exe) => {
+                                ui.label(exe.display().to_string());
                             }
                             None => {
-                                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-                                ui.painter()
-                                    .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
+                                ui.weak("not chosen");
                             }
                         }
-                    }
-                    (CoverView::Normal, Some(path)) => {
-                        let uri = format!("file://{}", path.display());
-                        ui.add(
-                            egui::Image::new(uri)
-                                .max_width(COVER_WIDTH)
-                                .corner_radius(6.0),
-                        );
-                    }
-                    (CoverView::Normal, None) => {
-                        let (rect, _) = ui.allocate_exact_size(
-                            egui::vec2(COVER_WIDTH, COVER_WIDTH * 0.75),
-                            egui::Sense::hover(),
-                        );
-                        ui.painter()
-                            .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "No cover",
-                            egui::FontId::proportional(16.0),
-                            ui.visuals().weak_text_color(),
-                        );
-                    }
-                }
+                        ui.end_row();
 
-                ui.vertical(|ui| {
-                    // Two columns, so every label lines up and so does every value.
-                    egui::Grid::new("details-info")
-                        .num_columns(2)
-                        .spacing([16.0, 6.0])
-                        .show(ui, |ui| {
-                            if let Some(library) = &view.library {
-                                row_label(ui, "Library");
-                                ui.label(library);
-                                ui.end_row();
-                            }
-
-                            row_label(ui, "Circle");
-                            match view.info.and_then(|i| i.circle.as_deref()) {
-                                Some(circle) => chip(ui, circle),
-                                None => {
-                                    ui.weak("--");
-                                }
-                            }
-                            ui.end_row();
-
-                            row_label(ui, "Tags");
-                            ui.horizontal_wrapped(|ui| {
-                                let genres = view.info.map(|i| i.genres.as_slice()).unwrap_or(&[]);
-                                if genres.is_empty() {
-                                    ui.weak("--");
-                                }
-                                for genre in genres {
-                                    chip(ui, genre);
-                                }
+                        if !view.candidates.is_empty() {
+                            row_label(ui, "Choose exe");
+                            ui.vertical(|ui| {
+                                action.choose_exe =
+                                    exe_choices(ui, view.candidates, None, Some(&mut *frame));
                             });
                             ui.end_row();
-
-                            row_label(ui, "Play time");
-                            ui.label(format_play_time(view.stats.play_time_secs));
-                            ui.end_row();
-
-                            row_label(ui, "Exe");
-                            match view.exe {
-                                Some(exe) => {
-                                    ui.label(exe.display().to_string());
-                                }
-                                None => {
-                                    ui.weak("not chosen");
-                                }
-                            }
-                            ui.end_row();
-
-                            if !view.candidates.is_empty() {
-                                row_label(ui, "Choose exe");
-                                ui.vertical(|ui| {
-                                    action.choose_exe =
-                                        exe_choices(ui, view.candidates, None, Some(&mut *frame));
-                                });
-                                ui.end_row();
-                            }
-                        });
-
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        if let Some(progress) = view.extracting {
-                            let pct = progress.fraction() * 100.0;
-                            ui.add(
-                                egui::ProgressBar::new(progress.fraction())
-                                    .desired_width(340.0)
-                                    .desired_height(crate::icons::BUTTON_HEIGHT)
-                                    .text(format!(
-                                        "Extracting {pct:.0}%  ({} / {} files)",
-                                        progress.files_done, progress.files_total
-                                    )),
-                            );
-                            let response = icon_text_button(ui, Icon::Close, "Cancel", true);
-                            if frame.pressed(ui, Control::CancelExtract, &response, true) {
-                                action.cancel_extract = true;
-                            }
-                        } else {
-                            if view.running {
-                                ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
-                            } else {
-                                let ready = view.exe.is_some();
-                                let response = icon_text_button(ui, Icon::Play, "Launch", ready);
-                                if frame.pressed(ui, Control::Launch, &response, ready) {
-                                    action.launch = true;
-                                }
-                            }
-                            let label = if view.busy {
-                                "Reloading..."
-                            } else {
-                                "Reload info"
-                            };
-                            let response = ui.add_enabled(!view.busy, egui::Button::new(label));
-                            if frame.pressed(ui, Control::ReloadInfo, &response, !view.busy) {
-                                action.reload = true;
-                            }
-                            match view.extract {
-                                Err(msg) => {
-                                    ui.colored_label(egui::Color32::LIGHT_RED, msg);
-                                }
-                                Ok(Status::NotExtracted) | Ok(Status::Ready { has_zip: true }) => {
-                                    let label = if matches!(view.extract, Ok(Status::NotExtracted))
-                                    {
-                                        "Extract"
-                                    } else {
-                                        "Re-extract"
-                                    };
-                                    let response = ui.button(label);
-                                    if frame.pressed(ui, Control::Extract, &response, true) {
-                                        action.extract = true;
-                                    }
-                                }
-                                Ok(Status::ExtractManually(_)) => {
-                                    ui.colored_label(egui::Color32::YELLOW, "extract manually");
-                                }
-                                Ok(Status::Ready { has_zip: false }) => {}
-                            }
-                        }
-                        let favorite = view.stats.favorite;
-                        let label = if favorite { "Unfavorite" } else { "Favorite" };
-                        let response =
-                            icon_text_button(ui, Icon::Heart { filled: favorite }, label, true);
-                        if frame.pressed(ui, Control::Favorite, &response, true) {
-                            action.toggle_favorite = true;
-                        }
-                        if let Some(has_entry) = view.steam_entry {
-                            let label = if has_entry {
-                                "Remove from Steam"
-                            } else {
-                                "Add to Steam"
-                            };
-                            let response = ui.button(label);
-                            if frame.pressed(ui, Control::SteamEntry, &response, true) {
-                                action.steam = Some(if has_entry {
-                                    SteamChange::Remove
-                                } else {
-                                    SteamChange::Add
-                                });
-                            }
-                            if has_entry && view.cover.is_some() {
-                                let response = ui.button("Update Steam image");
-                                if frame.pressed(ui, Control::SteamImages, &response, true) {
-                                    action.steam = Some(SteamChange::Images);
-                                }
-                                let label = match edit.steam_icon {
-                                    IconSource::Cover => "Icon: cover",
-                                    IconSource::Exe => "Icon: exe",
-                                };
-                                let response = ui
-                                    .button(label)
-                                    .on_hover_text("Where the Steam icon comes from");
-                                if frame.pressed(ui, Control::SteamIconSource, &response, true) {
-                                    action.steam = Some(SteamChange::ToggleIcon);
-                                }
-                            }
                         }
                     });
-                    if let Some(err) = view.error {
-                        ui.colored_label(egui::Color32::LIGHT_RED, err);
+
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    wrapped_rows_fit_buttons(ui);
+                    if let Some(progress) = view.extracting {
+                        let pct = progress.fraction() * 100.0;
+                        ui.add(
+                            egui::ProgressBar::new(progress.fraction())
+                                .desired_width(340.0)
+                                .desired_height(crate::icons::BUTTON_HEIGHT)
+                                .text(format!(
+                                    "Extracting {pct:.0}%  ({} / {} files)",
+                                    progress.files_done, progress.files_total
+                                )),
+                        );
+                        let response = icon_text_button(ui, Icon::Close, "Cancel", true);
+                        if frame.pressed(ui, Control::CancelExtract, &response, true) {
+                            action.cancel_extract = true;
+                        }
+                    } else {
+                        if view.running {
+                            ui.colored_label(egui::Color32::LIGHT_GREEN, "Running");
+                        } else {
+                            let ready = view.exe.is_some();
+                            let response = icon_text_button(ui, Icon::Play, "Launch", ready);
+                            if frame.pressed(ui, Control::Launch, &response, ready) {
+                                action.launch = true;
+                            }
+                        }
+                        let label = if view.busy {
+                            "Reloading..."
+                        } else {
+                            "Reload info"
+                        };
+                        let response = ui.add_enabled(!view.busy, egui::Button::new(label));
+                        if frame.pressed(ui, Control::ReloadInfo, &response, !view.busy) {
+                            action.reload = true;
+                        }
+                        match view.extract {
+                            Err(msg) => {
+                                ui.colored_label(egui::Color32::LIGHT_RED, msg);
+                            }
+                            Ok(Status::NotExtracted) | Ok(Status::Ready { has_zip: true }) => {
+                                let label = if matches!(view.extract, Ok(Status::NotExtracted)) {
+                                    "Extract"
+                                } else {
+                                    "Re-extract"
+                                };
+                                let response = ui.button(label);
+                                if frame.pressed(ui, Control::Extract, &response, true) {
+                                    action.extract = true;
+                                }
+                            }
+                            Ok(Status::ExtractManually(_)) => {
+                                ui.colored_label(egui::Color32::YELLOW, "extract manually");
+                            }
+                            Ok(Status::Ready { has_zip: false }) => {}
+                        }
                     }
-                    launch_options(ui, view, frame, edit, &mut action);
+                    let favorite = view.stats.favorite;
+                    let label = if favorite { "Unfavorite" } else { "Favorite" };
+                    let response =
+                        icon_text_button(ui, Icon::Heart { filled: favorite }, label, true);
+                    if frame.pressed(ui, Control::Favorite, &response, true) {
+                        action.toggle_favorite = true;
+                    }
+                    if let Some(has_entry) = view.steam_entry {
+                        let label = if has_entry {
+                            "Remove from Steam"
+                        } else {
+                            "Add to Steam"
+                        };
+                        let response = ui.button(label);
+                        if frame.pressed(ui, Control::SteamEntry, &response, true) {
+                            action.steam = Some(if has_entry {
+                                SteamChange::Remove
+                            } else {
+                                SteamChange::Add
+                            });
+                        }
+                        if has_entry && view.cover.is_some() {
+                            let response = ui.button("Update Steam image");
+                            if frame.pressed(ui, Control::SteamImages, &response, true) {
+                                action.steam = Some(SteamChange::Images);
+                            }
+                            let label = match edit.steam_icon {
+                                IconSource::Cover => "Icon: cover",
+                                IconSource::Exe => "Icon: exe",
+                            };
+                            let response = ui
+                                .button(label)
+                                .on_hover_text("Where the Steam icon comes from");
+                            if frame.pressed(ui, Control::SteamIconSource, &response, true) {
+                                action.steam = Some(SteamChange::ToggleIcon);
+                            }
+                        }
+                    }
                 });
-            });
+                if let Some(err) = view.error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, err);
+                }
+                launch_options(ui, view, frame, edit, &mut action);
+            };
+            if stacked {
+                draw_cover(ui, view, cover_width);
+                column(ui);
+            } else {
+                ui.horizontal_top(|ui| {
+                    draw_cover(ui, view, cover_width);
+                    ui.vertical(|ui| column(ui));
+                });
+            }
 
             ui.separator();
             match view.info {
@@ -452,6 +462,8 @@ fn proton_choice(
     ui.label("Proton");
     {
         let combo = egui::ComboBox::from_id_salt("proton-choice")
+            .width(form_width(ui))
+            .truncate()
             .selected_text(current)
             .show_ui(ui, |ui| {
                 if ui
@@ -475,8 +487,19 @@ fn proton_choice(
     }
 }
 
-/// Width of the Launch options text boxes.
+/// Rows that wrap start at the height of a button, so a row of buttons does not overlap the
+/// next one.
+fn wrapped_rows_fit_buttons(ui: &mut egui::Ui) {
+    ui.spacing_mut().interact_size.y = crate::icons::BUTTON_HEIGHT;
+}
+
+/// Width of the Launch options text boxes on a wide window.
 const FORM_WIDTH: f32 = 300.0;
+
+/// A text box's width: the usual one, or whatever room is left on a narrow window.
+fn form_width(ui: &egui::Ui) -> f32 {
+    FORM_WIDTH.min(ui.available_width())
+}
 
 fn form_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
     ui.add_enabled(
@@ -495,6 +518,7 @@ fn winetricks_section(
 ) -> egui::Response {
     ui.weak("Install into this game's prefix (winetricks)");
     ui.horizontal_wrapped(|ui| {
+        wrapped_rows_fit_buttons(ui);
         for (i, choice) in COMMON.iter().enumerate() {
             let on = edit.verbs_text.split_whitespace().any(|w| w == choice.verb);
             let done = edit.installed.iter().any(|v| v == choice.verb);
@@ -514,14 +538,15 @@ fn winetricks_section(
     });
     let ready = !view.running && !view.installing && !edit.proton_versions.is_empty();
     let typed = ui
-        .horizontal(|ui| {
+        .horizontal_wrapped(|ui| {
+            wrapped_rows_fit_buttons(ui);
             let typed = text_box(
                 ui,
                 frame,
                 Control::WinetricksBox,
                 egui::TextEdit::singleline(&mut edit.verbs_text)
                     .hint_text("verbs, e.g. dotnet48 win7")
-                    .desired_width(FORM_WIDTH),
+                    .desired_width(form_width(ui)),
             );
             let install = form_button(ui, "Install", ready);
             if frame.pressed(ui, Control::WinetricksInstall, &install, ready) {
@@ -586,14 +611,14 @@ fn launch_options(
                 egui::TextEdit::multiline(&mut edit.env_text)
                     .font(egui::TextStyle::Monospace)
                     .desired_rows(3)
-                    .desired_width(FORM_WIDTH),
+                    .desired_width(form_width(ui)),
             );
             ui.weak("Extra arguments");
             let args = text_box(
                 ui,
                 frame,
                 Control::ArgsBox,
-                egui::TextEdit::singleline(&mut edit.args).desired_width(FORM_WIDTH),
+                egui::TextEdit::singleline(&mut edit.args).desired_width(form_width(ui)),
             );
             ui.horizontal(|ui| {
                 let save = form_button(ui, "Save", true);
@@ -770,5 +795,189 @@ mod tests {
         );
         let left = spatial_next(&rects, at(Control::WinetricksInstall), Dir::Left);
         assert_eq!(items[left].target, Target::Control(Control::WinetricksBox));
+    }
+
+    /// The text of the whole page drawn `width` points wide with the Launch options open:
+    /// where every piece of text landed, and the focusable controls.
+    fn draw_page(
+        width: f32,
+        genres: usize,
+        steam: bool,
+    ) -> (Vec<(egui::Rect, String)>, Vec<crate::focus::Item>) {
+        let dir = std::env::temp_dir();
+        let mut edit = TuningEdit::load("k".into(), &dir);
+        edit.open = true;
+        edit.proton_versions = vec!["GE-Proton11-9-x86_64".to_owned()];
+        // A long pinned name that is not installed makes the widest dropdown text.
+        edit.pin = Some("GE-Proton11-9-x86_64-with-a-long-custom-suffix".to_owned());
+        let extract: Result<Status, String> = Ok(Status::Ready { has_zip: true });
+        let info = GameInfo {
+            id: "RJ1".into(),
+            title: "A fairly long title of a game".into(),
+            circle: Some("Some Circle Name".into()),
+            genres: (0..genres)
+                .map(|i| format!("Genre number {i} long"))
+                .collect(),
+            description: "A description. ".repeat(40),
+            cover: None,
+            found: true,
+        };
+        let exe = PathBuf::from("Game/Game.exe");
+        let view = DetailsView {
+            id: "RJ1",
+            library: Some("Main library".into()),
+            info: Some(&info),
+            cover: Some(PathBuf::from("/nonexistent/cover.jpg")),
+            cover_view: CoverView::Normal,
+            stats: Stats::default(),
+            exe: Some(exe.as_path()),
+            candidates: &[],
+            extract: &extract,
+            error: None,
+            busy: false,
+            running: false,
+            extracting: None,
+            installing: false,
+            steam_entry: steam.then_some(true),
+        };
+        let ctx = egui::Context::default();
+        let mut scroll = 0.0;
+        let mut texts = Vec::new();
+        let mut items = Vec::new();
+        for _ in 0..3 {
+            let mut frame = FocusFrame::new(None, None, false);
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 4000.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    details_ui(ui, &view, &mut frame, &mut edit, &mut scroll);
+                },
+            );
+            out.textures_delta.clear();
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(t) => Some((
+                        t.galley.rect.translate(t.pos.to_vec2()),
+                        t.galley.text().to_owned(),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            items = std::mem::take(&mut frame.items);
+        }
+        (texts, items)
+    }
+
+    /// Below this the header strip (Back, title) sits; the page proper starts under it.
+    const HEADER_HEIGHT: f32 = 40.0;
+
+    /// Every width the size presets give on the Deck's 1280-point-wide screen.
+    fn preset_widths() -> Vec<f32> {
+        let mut widths: Vec<f32> = dackel_launcher::window::SCALE_PRESETS
+            .iter()
+            .map(|size| (1280.0 / size).floor())
+            .collect();
+        // And the widths in between, where the layout switches.
+        widths.extend((400..=1800).step_by(50).map(|w| w as f32));
+        widths
+    }
+
+    #[test]
+    fn nothing_on_the_page_runs_past_the_right_edge_at_any_size() {
+        for width in preset_widths() {
+            for steam in [false, true] {
+                let (texts, items) = draw_page(width, 12, steam);
+                for rect in texts
+                    .iter()
+                    .map(|(r, _)| r)
+                    .chain(items.iter().map(|i| &i.rect))
+                {
+                    assert!(
+                        rect.right() <= width + 0.5,
+                        "{width} wide (steam {steam}): {rect:?} runs past the edge"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_two_pieces_of_text_overlap_at_any_size() {
+        for width in preset_widths() {
+            let (texts, _) = draw_page(width, 30, true);
+            // The header's wrapped labels report positions that are not where they are drawn.
+            let texts: Vec<_> = texts
+                .into_iter()
+                .filter(|(r, _)| r.top() > HEADER_HEIGHT)
+                .collect();
+            for (i, (a, _)) in texts.iter().enumerate() {
+                for (b, _) in &texts[i + 1..] {
+                    let overlap = a.intersect(*b);
+                    assert!(
+                        overlap.width() < 1.0 || overlap.height() < 1.0,
+                        "{width} wide: {a:?} overlaps {b:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_tags_sit_right_under_the_circle_with_no_big_gap() {
+        for width in preset_widths() {
+            let (texts, _) = draw_page(width, 30, false);
+            let find = |what: &str| {
+                texts
+                    .iter()
+                    .find(|(_, text)| text.contains(what))
+                    .unwrap_or_else(|| panic!("{width}: no text {what}"))
+                    .0
+            };
+            let circle = find("Some Circle Name");
+            let first_tag = find("Genre number 0 ");
+            let gap = first_tag.top() - circle.bottom();
+            assert!(
+                (0.0..40.0).contains(&gap),
+                "{width} wide: the first tag is {gap} below the circle"
+            );
+        }
+    }
+
+    #[test]
+    fn the_pad_can_reach_every_control_at_every_size() {
+        use dackel_launcher::nav::{Dir, spatial_next};
+        for width in preset_widths() {
+            let (_, items) = draw_page(width, 12, true);
+            let rects: Vec<_> = items.iter().map(|i| crate::focus::bounds(i.rect)).collect();
+            let mut seen = vec![false; items.len()];
+            let mut stack = vec![0];
+            seen[0] = true;
+            while let Some(at) = stack.pop() {
+                for dir in [Dir::Up, Dir::Down, Dir::Left, Dir::Right] {
+                    let next = spatial_next(&rects, at, dir);
+                    if !seen[next] {
+                        seen[next] = true;
+                        stack.push(next);
+                    }
+                }
+            }
+            let missed: Vec<_> = items
+                .iter()
+                .zip(&seen)
+                .filter(|(_, seen)| !**seen)
+                .map(|(i, _)| format!("{:?}", i.target))
+                .collect();
+            assert!(
+                missed.is_empty(),
+                "{width} wide: the pad cannot reach {missed:?}"
+            );
+        }
     }
 }

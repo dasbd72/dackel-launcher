@@ -114,6 +114,50 @@ pub fn icon_text_button(ui: &mut Ui, icon: Icon, text: &str, enabled: bool) -> R
 /// Vertical padding inside a chip.
 const CHIP_PAD_Y: i8 = 2;
 
+/// Horizontal padding on each side of a chip's text.
+const CHIP_PAD_X: f32 = 7.0;
+
+/// How wide `chip` draws this text.
+fn chip_width(ui: &Ui, text: &str) -> f32 {
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::TextStyle::Body.resolve(ui.style()),
+        ui.visuals().text_color(),
+    );
+    galley.size().x + 2.0 * CHIP_PAD_X
+}
+
+/// Chips in rows no wider than the room there is, one row under the other. Laid out by hand:
+/// `horizontal_wrapped` inside a grid cell gave the rows the wrong height, so they overlapped.
+pub fn chip_rows(ui: &mut Ui, texts: &[String]) {
+    let room = ui.available_width();
+    let gap = ui.spacing().item_spacing.x;
+    let mut rows: Vec<Vec<&String>> = Vec::new();
+    let mut used = 0.0;
+    for text in texts {
+        let width = chip_width(ui, text);
+        match rows.last_mut() {
+            Some(row) if used + gap + width <= room => {
+                used += gap + width;
+                row.push(text);
+            }
+            _ => {
+                used = width;
+                rows.push(vec![text]);
+            }
+        }
+    }
+    ui.vertical(|ui| {
+        for row in rows {
+            ui.horizontal(|ui| {
+                for text in row {
+                    chip(ui, text);
+                }
+            });
+        }
+    });
+}
+
 /// A small rounded box with a background, for circle and tag names.
 ///
 /// Painted and allocated by hand rather than with a `Frame`: a `Frame` is not wrapped by
@@ -125,12 +169,15 @@ pub fn chip(ui: &mut Ui, text: &str) {
         egui::TextStyle::Body.resolve(ui.style()),
         color,
     );
-    let size = galley.size() + vec2(14.0, 2.0 * f32::from(CHIP_PAD_Y));
+    let size = galley.size() + vec2(2.0 * CHIP_PAD_X, 2.0 * f32::from(CHIP_PAD_Y));
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     ui.painter()
         .rect_filled(rect, 4.0, ui.visuals().widgets.inactive.bg_fill);
-    ui.painter()
-        .galley(rect.min + vec2(7.0, f32::from(CHIP_PAD_Y)), galley, color);
+    ui.painter().galley(
+        rect.min + vec2(CHIP_PAD_X, f32::from(CHIP_PAD_Y)),
+        galley,
+        color,
+    );
 }
 
 fn allocate(ui: &mut Ui, size: Vec2, enabled: bool) -> (Rect, Response) {

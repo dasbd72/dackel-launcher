@@ -1228,6 +1228,7 @@ impl App {
         egui::Window::new("Settings")
             .collapsible(false)
             .resizable(false)
+            .max_width(ctx.content_rect().width() - 32.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.strong("Size on screen");
@@ -1337,6 +1338,7 @@ impl App {
         egui::Window::new("Libraries")
             .collapsible(false)
             .resizable(false)
+            .max_width(ctx.content_rect().width() - 32.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 // The library beside the program is listed only when it was found, and it
@@ -1346,7 +1348,7 @@ impl App {
                 }
                 for (i, root, offline) in &rows {
                     let i = *i;
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         // The button first, at the left edge, so up/down reaches it.
                         if i > 0 {
                             let button = ui.button("Remove");
@@ -1365,13 +1367,13 @@ impl App {
                 }
                 ui.separator();
                 ui.label("Add a folder that contains RJ game folders:");
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let edit = text_box(
                         ui,
                         frame,
                         Control::LibraryPath,
                         egui::TextEdit::singleline(self.libraries.input_mut())
-                            .desired_width(420.0)
+                            .desired_width(420.0_f32.min(ctx.content_rect().width() - 64.0))
                             .hint_text("/path/to/games"),
                     );
                     typing = edit.has_focus();
