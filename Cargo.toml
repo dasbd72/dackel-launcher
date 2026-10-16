@@ -3,7 +3,7 @@ name = "dackel-launcher"
 description = "Launch Windows games with Proton, with gamepad support"
 license = "MIT"
 repository = "https://github.com/dasbd72/dackel-launcher"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 
 [dependencies]
