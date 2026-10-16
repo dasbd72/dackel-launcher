@@ -13,6 +13,7 @@ pub const ICON_BUTTON: Vec2 = Vec2::new(46.0, BUTTON_HEIGHT);
 const ICON_SIZE: f32 = 20.0;
 
 const PLAY_GREEN: Color32 = Color32::from_rgb(76, 200, 118);
+const QUIT_RED: Color32 = Color32::from_rgb(235, 110, 100);
 const HEART_RED: Color32 = Color32::from_rgb(235, 72, 96);
 
 const PLAY: &[u8] = include_bytes!("../assets/icons/play-fill.svg");
@@ -20,13 +21,31 @@ const HEART_FILL: &[u8] = include_bytes!("../assets/icons/heart-fill.svg");
 const HEART: &[u8] = include_bytes!("../assets/icons/heart.svg");
 const INFO: &[u8] = include_bytes!("../assets/icons/info.svg");
 const CLOSE: &[u8] = include_bytes!("../assets/icons/x.svg");
+const GEAR: &[u8] = include_bytes!("../assets/icons/gear.svg");
+const RESCAN: &[u8] = include_bytes!("../assets/icons/arrows-clockwise.svg");
+const FOLDER: &[u8] = include_bytes!("../assets/icons/folder-open.svg");
+const FULLSCREEN: &[u8] = include_bytes!("../assets/icons/arrows-out.svg");
+const EYE: &[u8] = include_bytes!("../assets/icons/eye.svg");
+const EYE_SLASH: &[u8] = include_bytes!("../assets/icons/eye-slash.svg");
+const POWER: &[u8] = include_bytes!("../assets/icons/power.svg");
 
 #[derive(Clone, Copy)]
 pub enum Icon {
     Play,
-    Heart { filled: bool },
+    Heart {
+        filled: bool,
+    },
     Info,
     Close,
+    Settings,
+    Rescan,
+    Libraries,
+    Fullscreen,
+    /// Blur is on: the images are hidden.
+    Blur {
+        on: bool,
+    },
+    Quit,
 }
 
 impl Icon {
@@ -37,6 +56,13 @@ impl Icon {
             Icon::Heart { filled: false } => ("bytes://icons/heart.svg", HEART),
             Icon::Info => ("bytes://icons/info.svg", INFO),
             Icon::Close => ("bytes://icons/x.svg", CLOSE),
+            Icon::Settings => ("bytes://icons/gear.svg", GEAR),
+            Icon::Rescan => ("bytes://icons/arrows-clockwise.svg", RESCAN),
+            Icon::Libraries => ("bytes://icons/folder-open.svg", FOLDER),
+            Icon::Fullscreen => ("bytes://icons/arrows-out.svg", FULLSCREEN),
+            Icon::Blur { on: true } => ("bytes://icons/eye-slash.svg", EYE_SLASH),
+            Icon::Blur { on: false } => ("bytes://icons/eye.svg", EYE),
+            Icon::Quit => ("bytes://icons/power.svg", POWER),
         };
         Image::from_bytes(uri, bytes)
     }
@@ -47,7 +73,8 @@ impl Icon {
             _ if !enabled => weak,
             Icon::Play => PLAY_GREEN,
             Icon::Heart { filled: true } => HEART_RED,
-            Icon::Heart { filled: false } | Icon::Info | Icon::Close => ink,
+            Icon::Quit => QUIT_RED,
+            _ => ink,
         }
     }
 }

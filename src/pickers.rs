@@ -1,4 +1,4 @@
-//! The toolbar dropdowns: sort, zip encoding, UI size, press debounce and library filter.
+//! The dropdowns the controller opens as lists: sort, library filter and a game's Proton.
 //!
 //! Each one is described here once: its title, its entries, which entry is current, and what
 //! picking an entry chooses. The window that draws the list stays in the binary.
@@ -6,8 +6,7 @@
 use crate::browse::Sort;
 use crate::extract::Encoding;
 use crate::library::library_labels;
-use crate::nav::{Control, DEBOUNCE_PRESETS_MS};
-use crate::window::SCALE_PRESETS;
+use crate::nav::Control;
 use std::path::PathBuf;
 
 /// The Proton list's first entry: no choice, so the newest install is used.
@@ -20,9 +19,6 @@ pub const ENCODINGS: [Encoding; 3] = [Encoding::Auto, Encoding::Cp932, Encoding:
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Picker {
     Sort,
-    Encoding,
-    Scale,
-    Debounce,
     Library,
     /// The Proton version of the game on the details page.
     Proton,
@@ -33,9 +29,6 @@ impl Picker {
     pub fn for_control(control: Control) -> Option<Picker> {
         match control {
             Control::Sort => Some(Picker::Sort),
-            Control::Encoding => Some(Picker::Encoding),
-            Control::Scale => Some(Picker::Scale),
-            Control::Debounce => Some(Picker::Debounce),
             Control::LibraryFilter => Some(Picker::Library),
             Control::ProtonChoice => Some(Picker::Proton),
             _ => None,
@@ -55,9 +48,6 @@ pub struct PickerList {
 #[derive(Debug, Clone, Copy)]
 pub struct Selection<'a> {
     pub sort: Sort,
-    pub encoding: Encoding,
-    pub scale: f32,
-    pub debounce_ms: u64,
     pub libraries: &'a [PathBuf],
     pub library_filter: Option<usize>,
     /// The Proton versions installed here, for the open game.
@@ -70,9 +60,6 @@ pub struct Selection<'a> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Choice {
     Sort(Sort),
-    Encoding(Encoding),
-    Scale(f32),
-    Debounce(u64),
     /// `None` shows every library.
     LibraryFilter(Option<usize>),
     /// A slot of `Selection::proton_versions`; `None` is automatic.
@@ -111,17 +98,6 @@ pub fn list(picker: Picker, now: &Selection) -> PickerList {
             labels: SORTS.iter().map(|s| sort_label(*s).to_owned()).collect(),
             current: SORTS.iter().position(|s| *s == now.sort).unwrap_or(0),
         },
-        Picker::Encoding => PickerList {
-            title: "Zip encoding",
-            labels: ENCODINGS
-                .iter()
-                .map(|e| encoding_label(*e).to_owned())
-                .collect(),
-            current: ENCODINGS
-                .iter()
-                .position(|e| *e == now.encoding)
-                .unwrap_or(0),
-        },
         Picker::Library => {
             let mut labels = vec!["All libraries".to_owned()];
             labels.extend(library_labels(now.libraries));
@@ -131,17 +107,6 @@ pub fn list(picker: Picker, now: &Selection) -> PickerList {
                 current: now.library_filter.map_or(0, |slot| slot + 1),
             }
         }
-        Picker::Debounce => PickerList {
-            title: "Press debounce",
-            labels: DEBOUNCE_PRESETS_MS
-                .iter()
-                .map(|ms| debounce_label(*ms))
-                .collect(),
-            current: DEBOUNCE_PRESETS_MS
-                .iter()
-                .position(|ms| *ms == now.debounce_ms)
-                .unwrap_or(0),
-        },
         Picker::Proton => {
             let mut labels = vec![AUTOMATIC_PROTON.to_owned()];
             labels.extend(now.proton_versions.iter().cloned());
@@ -161,14 +126,6 @@ pub fn list(picker: Picker, now: &Selection) -> PickerList {
                 current,
             }
         }
-        Picker::Scale => PickerList {
-            title: "Size on screen",
-            labels: SCALE_PRESETS.iter().map(|p| format!("{p:.2}")).collect(),
-            current: SCALE_PRESETS
-                .iter()
-                .position(|p| (now.scale - p).abs() < 1e-3)
-                .unwrap_or(0),
-        },
     }
 }
 
@@ -178,15 +135,9 @@ pub fn list(picker: Picker, now: &Selection) -> PickerList {
 pub fn pick(picker: Picker, index: usize, library_count: usize) -> Option<Choice> {
     match picker {
         Picker::Sort => SORTS.get(index).copied().map(Choice::Sort),
-        Picker::Encoding => ENCODINGS.get(index).copied().map(Choice::Encoding),
         Picker::Library => Some(Choice::LibraryFilter(
             index.checked_sub(1).filter(|slot| *slot < library_count),
         )),
-        Picker::Debounce => DEBOUNCE_PRESETS_MS
-            .get(index)
-            .copied()
-            .map(Choice::Debounce),
-        Picker::Scale => SCALE_PRESETS.get(index).copied().map(Choice::Scale),
         Picker::Proton => Some(Choice::Proton(index.checked_sub(1))),
     }
 }

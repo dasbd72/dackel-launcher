@@ -446,3 +446,30 @@ mod scrolled_grid {
         assert_eq!(cursor.game(), Some("e"));
     }
 }
+
+#[test]
+fn the_settings_window_pulls_focus_onto_its_own_controls_once_drawn() {
+    let mut cursor = Cursor::new();
+    cursor.end_frame(vec![game("a", 0.0, 0.0)]);
+    cursor.keep_on_page(Page::Settings);
+    assert_eq!(cursor.control(), None, "waits until the window was drawn");
+
+    cursor.end_frame(vec![
+        control(Control::SettingsSize(0), 0.0, 0.0),
+        control(Control::SettingsClose, 0.0, 100.0),
+    ]);
+    cursor.keep_on_page(Page::Settings);
+    assert_eq!(cursor.control(), Some(Control::SettingsClose));
+
+    cursor.move_toward(Dir::Up);
+    cursor.keep_on_page(Page::Settings);
+    assert_eq!(cursor.control(), Some(Control::SettingsSize(0)));
+}
+
+#[test]
+fn the_launchers_steam_buttons_count_as_settings_controls() {
+    assert!(Control::AddLauncherToSteam.in_settings_window());
+    assert!(Control::SettingsDebounce(2).in_settings_window());
+    assert!(!Control::Libraries.in_settings_window());
+    assert!(!Control::LibraryClose.in_settings_window());
+}

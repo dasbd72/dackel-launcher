@@ -34,6 +34,8 @@ pub enum Popup {
     Picker(Picker),
     /// The manager for the added libraries.
     Libraries,
+    /// The window for the settings that are rarely changed.
+    Settings,
     Proton(ProtonPrompt),
     Overwrite(OverwritePrompt),
 }
@@ -67,7 +69,7 @@ impl Popup {
             Popup::Proton(prompt) => proton_options(prompt),
             Popup::Picker(picker) => picker_entries(*picker),
             Popup::Chooser(game) => candidates(*game),
-            Popup::Libraries => 0,
+            Popup::Libraries | Popup::Settings => 0,
         }
     }
 
@@ -80,7 +82,7 @@ impl Popup {
                 chooser: *game,
                 candidate: selected,
             },
-            Popup::Libraries => PickTarget::Nothing,
+            Popup::Libraries | Popup::Settings => PickTarget::Nothing,
         }
     }
 

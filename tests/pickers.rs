@@ -1,8 +1,7 @@
-//! The toolbar dropdowns (sort, zip encoding, UI scale, debounce, library filter): what each
+//! The dropdowns the controller opens as lists (sort, library filter, a game's Proton): what each
 //! one lists, which entry is current, and what picking an entry changes.
 
 use dackel_launcher::browse::Sort;
-use dackel_launcher::extract::Encoding;
 use dackel_launcher::nav::Control;
 use dackel_launcher::pickers::{Choice, Picker, Selection, list, pick};
 use std::path::PathBuf;
@@ -17,9 +16,6 @@ fn libraries(names: &[&str]) -> Vec<PathBuf> {
 fn selection(libraries: &[PathBuf]) -> Selection<'_> {
     Selection {
         sort: Sort::LastPlayed,
-        encoding: Encoding::Auto,
-        scale: 1.0,
-        debounce_ms: 25,
         libraries,
         library_filter: None,
         proton_versions: &[],
@@ -60,138 +56,6 @@ mod sort {
     #[test]
     fn picking_past_the_end_changes_nothing() {
         assert_eq!(pick(Picker::Sort, 3, 0), None);
-    }
-}
-
-mod encoding {
-    use super::*;
-
-    #[test]
-    fn lists_auto_cp932_and_utf8_in_that_order() {
-        let libs = libraries(&[]);
-        let now = Selection {
-            encoding: Encoding::Utf8,
-            ..selection(&libs)
-        };
-
-        let l = list(Picker::Encoding, &now);
-
-        assert_eq!(l.title, "Zip encoding");
-        assert_eq!(l.labels, ["Auto", "cp932", "UTF-8"]);
-        assert_eq!(l.current, 2);
-    }
-
-    #[test]
-    fn picking_an_entry_chooses_that_encoding() {
-        assert_eq!(
-            pick(Picker::Encoding, 1, 0),
-            Some(Choice::Encoding(Encoding::Cp932))
-        );
-        assert_eq!(
-            pick(Picker::Encoding, 2, 0),
-            Some(Choice::Encoding(Encoding::Utf8))
-        );
-    }
-
-    #[test]
-    fn picking_past_the_end_changes_nothing() {
-        assert_eq!(pick(Picker::Encoding, 3, 0), None);
-    }
-}
-
-mod scale {
-    use super::*;
-
-    #[test]
-    fn lists_the_presets_with_two_decimals() {
-        let libs = libraries(&[]);
-        let now = Selection {
-            scale: 1.5,
-            ..selection(&libs)
-        };
-
-        let l = list(Picker::Scale, &now);
-
-        assert_eq!(l.title, "Size on screen");
-        assert_eq!(
-            l.labels,
-            ["0.75", "1.00", "1.25", "1.50", "1.75", "2.00", "2.50"]
-        );
-        assert_eq!(l.current, 3);
-    }
-
-    #[test]
-    fn a_scale_within_a_thousandth_of_a_preset_counts_as_that_preset() {
-        let libs = libraries(&[]);
-        let now = Selection {
-            scale: 1.2504,
-            ..selection(&libs)
-        };
-
-        assert_eq!(list(Picker::Scale, &now).current, 2);
-    }
-
-    #[test]
-    fn a_scale_between_presets_marks_the_first_entry() {
-        let libs = libraries(&[]);
-        let now = Selection {
-            scale: 1.1,
-            ..selection(&libs)
-        };
-
-        assert_eq!(list(Picker::Scale, &now).current, 0);
-    }
-
-    #[test]
-    fn picking_an_entry_chooses_that_scale() {
-        assert_eq!(pick(Picker::Scale, 0, 0), Some(Choice::Scale(0.75)));
-        assert_eq!(pick(Picker::Scale, 6, 0), Some(Choice::Scale(2.5)));
-    }
-
-    #[test]
-    fn picking_past_the_end_changes_nothing() {
-        assert_eq!(pick(Picker::Scale, 7, 0), None);
-    }
-}
-
-mod debounce {
-    use super::*;
-
-    #[test]
-    fn lists_off_and_the_millisecond_presets() {
-        let libs = libraries(&[]);
-        let now = Selection {
-            debounce_ms: 100,
-            ..selection(&libs)
-        };
-
-        let l = list(Picker::Debounce, &now);
-
-        assert_eq!(l.title, "Press debounce");
-        assert_eq!(l.labels, ["Off", "25 ms", "50 ms", "100 ms", "150 ms"]);
-        assert_eq!(l.current, 3);
-    }
-
-    #[test]
-    fn a_window_that_is_no_preset_marks_the_first_entry() {
-        let libs = libraries(&[]);
-        let now = Selection {
-            debounce_ms: 40,
-            ..selection(&libs)
-        };
-
-        assert_eq!(list(Picker::Debounce, &now).current, 0);
-    }
-
-    #[test]
-    fn picking_an_entry_chooses_that_window() {
-        assert_eq!(pick(Picker::Debounce, 0, 0), Some(Choice::Debounce(0)));
-        assert_eq!(pick(Picker::Debounce, 4, 0), Some(Choice::Debounce(150)));
-    }
-
-    #[test]
-    fn picking_past_the_end_changes_nothing() {
-        assert_eq!(pick(Picker::Debounce, 5, 0), None);
     }
 }
 
@@ -265,15 +129,6 @@ mod controls {
     fn each_dropdown_control_opens_its_own_picker() {
         assert_eq!(Picker::for_control(Control::Sort), Some(Picker::Sort));
         assert_eq!(
-            Picker::for_control(Control::Encoding),
-            Some(Picker::Encoding)
-        );
-        assert_eq!(Picker::for_control(Control::Scale), Some(Picker::Scale));
-        assert_eq!(
-            Picker::for_control(Control::Debounce),
-            Some(Picker::Debounce)
-        );
-        assert_eq!(
             Picker::for_control(Control::LibraryFilter),
             Some(Picker::Library)
         );
@@ -284,6 +139,7 @@ mod controls {
         assert_eq!(Picker::for_control(Control::Rescan), None);
         assert_eq!(Picker::for_control(Control::Quit), None);
         assert_eq!(Picker::for_control(Control::Blur), None);
+        assert_eq!(Picker::for_control(Control::Settings), None);
     }
 }
 

@@ -28,6 +28,8 @@ pub enum Page {
     Details,
     /// The Libraries window is open over the page.
     Libraries,
+    /// The Settings window is open over the page.
+    Settings,
 }
 
 #[derive(Debug)]
@@ -107,6 +109,10 @@ impl Cursor {
             (Page::Libraries, _) if !drawn(Control::LibraryClose) => {}
             (Page::Libraries, Some(c)) if c.in_library_window() && drawn(c) => {}
             (Page::Libraries, _) => self.control = Some(Control::LibraryPath),
+            // The Settings window the same, starting on its close button.
+            (Page::Settings, _) if !drawn(Control::SettingsClose) => {}
+            (Page::Settings, Some(c)) if c.in_settings_window() && drawn(c) => {}
+            (Page::Settings, _) => self.control = Some(Control::SettingsClose),
             // The details page always has focus on one of its controls.
             (Page::Details, Some(c)) if drawn(c) => {}
             (Page::Details, _) => self.control = Some(Control::Back),

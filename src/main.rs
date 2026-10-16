@@ -851,12 +851,6 @@ impl App {
         if actions.toggle_blur {
             self.toggle_blur();
         }
-        if let Some(ms) = actions.debounce {
-            self.set_debounce(ms);
-        }
-        if let Some(scale) = actions.scale {
-            self.set_screen_size(scale);
-        }
     }
 
     /// Carries out what the frame asked for, once everything has been drawn: the popups'
@@ -935,7 +929,7 @@ impl App {
     }
 
     fn context(&self) -> Context {
-        if matches!(self.popup, Some(Popup::Libraries)) {
+        if matches!(self.popup, Some(Popup::Libraries | Popup::Settings)) {
             Context::Window
         } else if self.popup.is_some() {
             Context::Chooser
@@ -1125,6 +1119,119 @@ impl App {
         }
     }
 
+    /// The settings that are rarely changed: the size on screen, the press debounce, the zip
+    /// encoding and the launcher's own Steam shortcut. Each choice is a row of buttons, so
+    /// the D-pad can pick one. Returns what to do with the launcher's Steam shortcut.
+    fn settings_window(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &mut FocusFrame,
+    ) -> Option<LauncherChange> {
+        let size = self.window.size();
+        let system = self.window.system_scale();
+        let debounce = self.pad.debounce_window();
+        let encoding = self.encoding;
+        let steam = self.launcher_in_steam();
+        let mut pick_size = None;
+        let mut pick_debounce = None;
+        let mut pick_encoding = None;
+        let mut launcher_change = None;
+        let mut close = false;
+        egui::Window::new("Settings")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.strong("Size on screen");
+                ui.weak(match system {
+                    Some(system) => format!("The window system's own scale is x{system:.2}"),
+                    None => "The window system gave no scale".to_owned(),
+                });
+                ui.horizontal_wrapped(|ui| {
+                    for (i, preset) in window::SCALE_PRESETS.iter().enumerate() {
+                        let on = (size - preset).abs() < 1e-3;
+                        let response = ui.selectable_label(on, format!("{preset:.2}"));
+                        if frame.pressed(ui, Control::SettingsSize(i), &response, true) {
+                            pick_size = Some(*preset);
+                        }
+                    }
+                });
+
+                ui.separator();
+                ui.strong("Press debounce");
+                ui.weak(DEBOUNCE_HELP.trim_start_matches("Press debounce\n"));
+                ui.horizontal_wrapped(|ui| {
+                    for (i, ms) in DEBOUNCE_PRESETS_MS.iter().enumerate() {
+                        let response = ui.selectable_label(*ms == debounce, debounce_label(*ms));
+                        if frame.pressed(ui, Control::SettingsDebounce(i), &response, true) {
+                            pick_debounce = Some(*ms);
+                        }
+                    }
+                });
+
+                ui.separator();
+                ui.strong("Zip encoding");
+                ui.weak(ZIP_ENCODING_HELP.trim_start_matches("Zip encoding\n"));
+                ui.horizontal_wrapped(|ui| {
+                    for (i, choice) in ENCODINGS.iter().enumerate() {
+                        let response =
+                            ui.selectable_label(*choice == encoding, encoding_label(*choice));
+                        if frame.pressed(ui, Control::SettingsEncoding(i), &response, true) {
+                            pick_encoding = Some(*choice);
+                        }
+                    }
+                });
+
+                if let Some(state) = steam {
+                    ui.separator();
+                    ui.strong("Dackel Launcher in Steam");
+                    ui.horizontal_wrapped(|ui| match state {
+                        LauncherState::Absent => {
+                            let response = ui.button("Add to Steam");
+                            if frame.pressed(ui, Control::AddLauncherToSteam, &response, true) {
+                                launcher_change = Some(LauncherChange::Add);
+                            }
+                        }
+                        _ => {
+                            let label = if state == LauncherState::Outdated {
+                                "Update in Steam"
+                            } else {
+                                "Update Steam images"
+                            };
+                            let response = ui.button(label);
+                            if frame.pressed(ui, Control::UpdateLauncherInSteam, &response, true) {
+                                launcher_change = Some(LauncherChange::Update);
+                            }
+                            let response = ui.button("Remove from Steam");
+                            if frame.pressed(ui, Control::RemoveLauncherFromSteam, &response, true)
+                            {
+                                launcher_change = Some(LauncherChange::Remove);
+                            }
+                        }
+                    });
+                }
+
+                ui.separator();
+                let response = ui.button("Close");
+                if frame.pressed(ui, Control::SettingsClose, &response, true) {
+                    close = true;
+                }
+            });
+        if let Some(size) = pick_size {
+            self.set_screen_size(size);
+        }
+        if let Some(ms) = pick_debounce {
+            self.set_debounce(ms);
+        }
+        if let Some(choice) = pick_encoding {
+            self.encoding = choice;
+        }
+        if close && matches!(self.popup, Some(Popup::Settings)) {
+            self.popup = None;
+        }
+        launcher_change
+    }
+
     /// The manager for the added libraries: list them, add a typed path, remove one.
     fn libraries_window(&mut self, ctx: &egui::Context, frame: &mut FocusFrame) {
         let mut remove: Option<usize> = None;
@@ -1268,9 +1375,6 @@ impl App {
     fn selection(&self) -> Selection<'_> {
         Selection {
             sort: self.query.sort,
-            encoding: self.encoding,
-            scale: self.window.size(),
-            debounce_ms: self.pad.debounce_window(),
             libraries: self.libraries.roots(),
             library_filter: self.libraries.filter(),
             proton_versions: self
@@ -1337,10 +1441,7 @@ impl App {
     fn pick(&mut self, picker: Picker, index: usize) {
         match pickers::pick(picker, index, self.libraries.count()) {
             Some(Choice::Sort(sort)) => self.query.sort = sort,
-            Some(Choice::Encoding(encoding)) => self.encoding = encoding,
             Some(Choice::LibraryFilter(slot)) => self.libraries.set_filter(slot),
-            Some(Choice::Debounce(ms)) => self.set_debounce(ms),
-            Some(Choice::Scale(scale)) => self.set_screen_size(scale),
             Some(Choice::Proton(slot)) => self.choose_proton(slot),
             None => {}
         }
@@ -1418,8 +1519,10 @@ impl App {
         match command {
             Command::Move(dir) => self.cursor.move_toward(dir),
             Command::Primary => {
-                // Behind the Libraries window nothing is launched.
-                if matches!(self.popup, Some(Popup::Libraries)) && self.cursor.control().is_none() {
+                // Behind a window of controls nothing is launched.
+                if matches!(self.popup, Some(Popup::Libraries | Popup::Settings))
+                    && self.cursor.control().is_none()
+                {
                     return;
                 }
                 // A control with focus is pressed; the library's dropdowns open a list.
@@ -1696,91 +1799,33 @@ impl eframe::App for App {
         if self.infos.any_busy() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
-        let current_scale = self.window.size();
-        let system_scale = ui.ctx().native_pixels_per_point();
         let mut blur_on = self.settings.blur_covers;
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
-                let response = ui.button("Rescan");
+                let response = icon_button(ui, Icon::Settings, "Settings", true);
+                if frame.pressed(ui, Control::Settings, &response, true) {
+                    self.popup = Some(Popup::Settings);
+                }
+                let response = icon_button(ui, Icon::Rescan, "Rescan the libraries (Start)", true);
                 if frame.pressed(ui, Control::Rescan, &response, true) {
                     actions.rescan = true;
                 }
-                let response = ui.button("Libraries");
+                let response = icon_button(ui, Icon::Libraries, "Libraries", true);
                 if frame.pressed(ui, Control::Libraries, &response, true) {
                     self.popup = Some(Popup::Libraries);
                 }
-                match self.launcher_in_steam() {
-                    Some(LauncherState::Absent) => {
-                        let response = ui.button("Add to Steam");
-                        if frame.pressed(ui, Control::AddLauncherToSteam, &response, true) {
-                            launcher_change = Some(LauncherChange::Add);
-                        }
-                    }
-                    Some(state) => {
-                        let label = if state == LauncherState::Outdated {
-                            "Update in Steam"
-                        } else {
-                            "Update Steam images"
-                        };
-                        let response = ui.button(label);
-                        if frame.pressed(ui, Control::UpdateLauncherInSteam, &response, true) {
-                            launcher_change = Some(LauncherChange::Update);
-                        }
-                        let response = ui.button("Remove from Steam");
-                        if frame.pressed(ui, Control::RemoveLauncherFromSteam, &response, true) {
-                            launcher_change = Some(LauncherChange::Remove);
-                        }
-                    }
-                    None => {}
-                }
-                let response = ui.button("Fullscreen");
+                let response = icon_button(ui, Icon::Fullscreen, "Fullscreen (F11)", true);
                 actions.fullscreen = frame.pressed(ui, Control::Fullscreen, &response, true);
-                let response = ui
-                    .toggle_value(&mut blur_on, "Blur")
-                    .on_hover_text("Blur all images (key: B)");
-                frame.register(ui, Control::Blur, &response);
-                if frame.activated(Control::Blur) {
+                let response = icon_button(
+                    ui,
+                    Icon::Blur { on: blur_on },
+                    "Blur all images (key: B)",
+                    true,
+                );
+                if frame.pressed(ui, Control::Blur, &response, true) {
                     blur_on = !blur_on;
                 }
-                let response = egui::ComboBox::from_id_salt("ui-scale")
-                    .selected_text(window::scale_label(current_scale, system_scale))
-                    .show_ui(ui, |ui| {
-                        for preset in window::SCALE_PRESETS {
-                            let on = (current_scale - preset).abs() < 1e-3;
-                            if ui.selectable_label(on, format!("{preset:.2}")).clicked() {
-                                actions.scale = Some(preset);
-                            }
-                        }
-                    })
-                    .response;
-                frame.register(ui, Control::Scale, &response);
-                let response = egui::ComboBox::from_id_salt("debounce")
-                    .selected_text(format!(
-                        "Debounce {}",
-                        debounce_label(self.pad.debounce_window())
-                    ))
-                    .show_ui(ui, |ui| {
-                        for ms in DEBOUNCE_PRESETS_MS {
-                            let on = ms == self.pad.debounce_window();
-                            if ui.selectable_label(on, debounce_label(ms)).clicked() {
-                                actions.debounce = Some(ms);
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text(DEBOUNCE_HELP);
-                frame.register(ui, Control::Debounce, &response);
-                let response = egui::ComboBox::from_id_salt("zip-encoding")
-                    .selected_text(encoding_label(self.encoding))
-                    .show_ui(ui, |ui| {
-                        for choice in ENCODINGS {
-                            ui.selectable_value(&mut self.encoding, choice, encoding_label(choice));
-                        }
-                    })
-                    .response
-                    .on_hover_text(ZIP_ENCODING_HELP);
-                frame.register(ui, Control::Encoding, &response);
-                let response = ui.button("Quit");
+                let response = icon_button(ui, Icon::Quit, "Quit", true);
                 if frame.pressed(ui, Control::Quit, &response, true) {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -2086,6 +2131,10 @@ impl eframe::App for App {
             // Only the window's own controls can be focused while it is open.
             frame.items.clear();
             self.libraries_window(ui.ctx(), &mut frame);
+        }
+        if matches!(self.popup, Some(Popup::Settings)) {
+            frame.items.clear();
+            launcher_change = self.settings_window(ui.ctx(), &mut frame);
         }
         if self.proton_prompt_open() {
             self.proton_prompt_window(ui.ctx());

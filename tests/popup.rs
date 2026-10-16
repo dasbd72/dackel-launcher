@@ -60,6 +60,7 @@ fn the_exe_chooser_lists_the_candidates_of_its_game() {
 #[test]
 fn the_libraries_window_has_no_list() {
     assert_eq!(len(&Popup::Libraries), 0);
+    assert_eq!(len(&Popup::Settings), 0);
 }
 
 #[test]
@@ -67,7 +68,7 @@ fn each_popup_asks_only_for_its_own_size() {
     // A size that panics when asked for proves the other sizes are never worked out.
     let boom = |_: usize| -> usize { panic!("not this popup's size") };
     assert_eq!(
-        Popup::Picker(Picker::Scale).list_len(boom, |_| 5, |_| panic!()),
+        Popup::Picker(Picker::Sort).list_len(boom, |_| 5, |_| panic!()),
         5
     );
     assert_eq!(overwrite().list_len(boom, |_| panic!(), |_| panic!()), 3);
@@ -78,8 +79,8 @@ fn picking_means_what_the_open_popup_says() {
     assert_eq!(overwrite().pick(1), PickTarget::Overwrite(1));
     assert_eq!(proton().pick(0), PickTarget::Proton(0));
     assert_eq!(
-        Popup::Picker(Picker::Encoding).pick(2),
-        PickTarget::Picker(Picker::Encoding, 2)
+        Popup::Picker(Picker::Library).pick(2),
+        PickTarget::Picker(Picker::Library, 2)
     );
     assert_eq!(
         Popup::Chooser(5).pick(1),
@@ -93,6 +94,7 @@ fn picking_means_what_the_open_popup_says() {
 #[test]
 fn picking_in_the_libraries_window_does_nothing() {
     assert_eq!(Popup::Libraries.pick(0), PickTarget::Nothing);
+    assert_eq!(Popup::Settings.pick(0), PickTarget::Nothing);
 }
 
 #[test]

@@ -62,6 +62,8 @@ pub enum Control {
     // Toolbar.
     Rescan,
     Libraries,
+    /// Opens the Settings window.
+    Settings,
     /// Adds the launcher itself to Steam.
     AddLauncherToSteam,
     /// Points the launcher's Steam shortcut at where the launcher is now.
@@ -74,9 +76,6 @@ pub enum Control {
     CreateLibrary,
     Fullscreen,
     Blur,
-    Scale,
-    Debounce,
-    Encoding,
     Sort,
     LibraryFilter,
     FavoritesOnly,
@@ -113,9 +112,32 @@ pub enum Control {
     LibraryClose,
     /// The Remove button of the library in this slot.
     LibraryRemove(usize),
+    // Settings window.
+    /// A size-on-screen preset, by its slot in `SCALE_PRESETS`.
+    SettingsSize(usize),
+    /// A press-debounce preset, by its slot in `DEBOUNCE_PRESETS_MS`.
+    SettingsDebounce(usize),
+    /// A zip encoding, by its slot in `ENCODINGS`.
+    SettingsEncoding(usize),
+    SettingsClose,
 }
 
 impl Control {
+    /// Whether the control lives in the Settings window, where the launcher's Steam buttons
+    /// are too.
+    pub fn in_settings_window(self) -> bool {
+        matches!(
+            self,
+            Control::SettingsSize(_)
+                | Control::SettingsDebounce(_)
+                | Control::SettingsEncoding(_)
+                | Control::SettingsClose
+                | Control::AddLauncherToSteam
+                | Control::UpdateLauncherInSteam
+                | Control::RemoveLauncherFromSteam
+        )
+    }
+
     /// Whether the control lives in the Libraries window.
     pub fn in_library_window(self) -> bool {
         matches!(

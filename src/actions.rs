@@ -11,8 +11,6 @@ pub struct Actions {
     pub rescan: bool,
     pub fullscreen: bool,
     pub toggle_blur: bool,
-    pub scale: Option<f32>,
-    pub debounce: Option<u64>,
 
     // The page shown when there is no library.
     pub create_library: bool,
