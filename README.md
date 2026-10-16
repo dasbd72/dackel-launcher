@@ -17,6 +17,9 @@ curl -fsSL https://github.com/dasbd72/dackel-launcher/releases/latest/download/i
 Installs the launcher and `umu-run` for your user and adds a menu entry. Run it again to update.
 See `docs/install-script.md`.
 
+On Arch, the AUR has `dackel-launcher` (built from source) and `dackel-launcher-bin` (the
+release binary); both are published by `.github/workflows/aur.yml` for every version tag.
+
 ## License
 
 MIT, see `LICENSE`. The files that the AUR and Flatpak packages install (desktop entry, icon,

@@ -1,6 +1,7 @@
 name: AUR
 
-# Publishes the PKGBUILD to the AUR when a version tag is pushed.
+# Publishes dackel-launcher (built from source) and dackel-launcher-bin (the release binary)
+# to the AUR when a version tag is pushed.
 # Needs the repository secret AUR_SSH_PRIVATE_KEY: the private key whose public half is on
 # the AUR account that maintains dackel-launcher.
 on:
@@ -37,6 +38,45 @@ jobs:
         with:
           pkgname: dackel-launcher
           pkgbuild: PKGBUILD
+          updpkgsums: true
+          test: false
+          commit_username: dasbd72
+          commit_email: twbd723@gmail.com
+          commit_message: Update to ${{ inputs.version || github.ref_name }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+
+  aur-bin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set the version
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          version="${VERSION#v}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          sed -i "s/^pkgver=.*/pkgver=$version/; s/^pkgrel=.*/pkgrel=1/" PKGBUILD-bin
+
+      # The release workflow runs on the same tag; the binary it uploads may not be there yet.
+      - name: Wait for the release binary
+        run: |
+          url="https://github.com/dasbd72/dackel-launcher/releases/download/v$VERSION/dackel-launcher"
+          for _ in $(seq 60); do
+            if curl -fsIL "$url" >/dev/null; then exit 0; fi
+            sleep 30
+          done
+          echo "the v$VERSION release has no dackel-launcher binary after 30 minutes" >&2
+          exit 1
+
+      - name: Test build
+        run: scripts/test-aur-build.sh PKGBUILD-bin
+
+      - name: Publish to the AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        with:
+          pkgname: dackel-launcher-bin
+          pkgbuild: PKGBUILD-bin
           updpkgsums: true
           test: false
           commit_username: dasbd72
