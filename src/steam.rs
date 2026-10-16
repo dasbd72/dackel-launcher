@@ -210,6 +210,36 @@ pub fn add_launcher(root: &mut Value, launcher: &Path) -> (u32, bool) {
     (id, true)
 }
 
+/// The app ids of the shortcuts for the launcher.
+pub fn launcher_app_ids(root: &Value) -> Vec<u32> {
+    root.get("shortcuts")
+        .map(|list| {
+            list.items()
+                .iter()
+                .filter(|(_, e)| is_launcher_entry(e))
+                .filter_map(|(_, e)| match e.get("appid") {
+                    Some(Value::U32(id)) => Some(*id),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Sets the icon of every shortcut for the launcher. Returns how many changed.
+pub fn set_launcher_icon(root: &mut Value, icon: &Path) -> usize {
+    let icon = icon.to_string_lossy().into_owned();
+    let mut changed = 0;
+    for (_, entry) in list_mut(root).iter_mut() {
+        if !is_launcher_entry(entry) || entry.get("icon").and_then(Value::as_str) == Some(&icon) {
+            continue;
+        }
+        set(entry, "icon", Value::Str(icon.clone()));
+        changed += 1;
+    }
+    changed
+}
+
 /// Points every shortcut for the launcher at its current place. Returns how many changed.
 pub fn update_launcher(root: &mut Value, launcher: &Path) -> usize {
     let exe = quoted(launcher);
@@ -394,4 +424,44 @@ pub fn save_shortcuts(path: &Path, root: &Value) -> io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     std::fs::write(path, crate::vdf::write(root))
+}
+
+/// The launcher's artwork, drawn by `scripts/make-steam-art.sh`, as Steam names each image.
+fn launcher_art(app_id: u32) -> [(String, &'static [u8]); 5] {
+    [
+        (
+            format!("{app_id}p.png"),
+            include_bytes!("../assets/steam/portrait.png"),
+        ),
+        (
+            format!("{app_id}.png"),
+            include_bytes!("../assets/steam/wide.png"),
+        ),
+        (
+            format!("{app_id}_hero.png"),
+            include_bytes!("../assets/steam/hero.png"),
+        ),
+        (
+            format!("{app_id}_logo.png"),
+            include_bytes!("../assets/steam/logo.png"),
+        ),
+        (
+            format!("{app_id}_icon.png"),
+            include_bytes!("../assets/steam/icon.png"),
+        ),
+    ]
+}
+
+/// The file name of the launcher's icon for an app id (the shortcut's `icon` points at it).
+pub fn launcher_icon_name(app_id: u32) -> String {
+    format!("{app_id}_icon.png")
+}
+
+/// Writes the launcher's whole artwork set into Steam's grid folder.
+pub fn write_launcher_art(grid_dir: &Path, app_id: u32) -> io::Result<()> {
+    std::fs::create_dir_all(grid_dir)?;
+    for (name, bytes) in launcher_art(app_id) {
+        std::fs::write(grid_dir.join(name), bytes)?;
+    }
+    Ok(())
 }

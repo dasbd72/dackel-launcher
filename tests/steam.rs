@@ -460,3 +460,45 @@ mod launcher_upkeep {
         assert!(!remove_launcher(&mut root));
     }
 }
+
+mod launcher_art {
+    use super::*;
+    use dackel_launcher::steam::{
+        add_launcher, launcher_app_ids, set_launcher_icon, write_launcher_art,
+    };
+
+    #[test]
+    fn the_whole_set_is_written_under_steams_names_at_steams_sizes() {
+        let dir = tempfile::tempdir().unwrap();
+
+        write_launcher_art(dir.path(), 42).unwrap();
+
+        for (name, size) in [
+            ("42p.png", (600, 900)),
+            ("42.png", (920, 430)),
+            ("42_hero.png", (3840, 1240)),
+            ("42_logo.png", (1280, 360)),
+            ("42_icon.png", (256, 256)),
+        ] {
+            let img = image::open(dir.path().join(name)).unwrap();
+            assert_eq!((img.width(), img.height()), size, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_launchers_entries_are_found_by_app_id_and_given_an_icon() {
+        let mut root = with_users_own();
+        let (id, _) = add_launcher(&mut root, &launcher());
+
+        assert_eq!(launcher_app_ids(&root), [id]);
+        assert_eq!(set_launcher_icon(&mut root, Path::new("/grid/icon.png")), 1);
+
+        assert_eq!(text(entries(&root)[1], "icon"), "/grid/icon.png");
+        assert_eq!(text(entries(&root)[0], "AppName"), "Their Game");
+        assert!(
+            entries(&root)[0].get("icon").is_none(),
+            "the user's entry is untouched"
+        );
+        assert_eq!(set_launcher_icon(&mut root, Path::new("/grid/icon.png")), 0);
+    }
+}

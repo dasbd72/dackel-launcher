@@ -21,3 +21,9 @@ The details page of a game has **Add to Steam** / **Remove from Steam** when Ste
   Once there is one (including one made by hand), it shows **Remove from Steam**, and **Update in
   Steam** when the launcher has moved since (the shortcut keeps its app id and name). A shortcut is
   the launcher's when it has no launch options and its program is named `dackel-launcher`.
+
+- **Launcher artwork:** adding or updating the launcher's shortcut writes a full image set (portrait and
+  wide capsules, hero, logo, icon) into the account's `grid` folder and sets the shortcut's icon. The
+  PNGs in `assets/steam/` are embedded in the program and drawn by `scripts/make-steam-art.sh`
+  (rsvg-convert and ImageMagick); the colours and paw come from the app icon. With the shortcut in
+  place the toolbar's update button reads **Update Steam images** until the launcher moves.

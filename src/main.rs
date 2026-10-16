@@ -742,6 +742,8 @@ impl App {
             let (_, path, account) = self.steam_shortcuts()?;
             let mut shortcuts = steam::load_shortcuts(&path)?;
             let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
+            let (root, _, _) = self.steam_shortcuts()?;
+            let grid = steam::grid_dir(&root, &account);
             let verb = match change {
                 LauncherChange::Add => {
                     if !steam::add_launcher(&mut shortcuts, &launcher).1 {
@@ -760,6 +762,16 @@ impl App {
                     "Removed"
                 }
             };
+            if change != LauncherChange::Remove {
+                for id in steam::launcher_app_ids(&shortcuts) {
+                    steam::write_launcher_art(&grid, id)
+                        .map_err(|e| format!("could not write the images: {e}"))?;
+                    steam::set_launcher_icon(
+                        &mut shortcuts,
+                        &grid.join(steam::launcher_icon_name(id)),
+                    );
+                }
+            }
             steam::save_shortcuts(&path, &shortcuts)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
             let restart = if steam::steam_running(Path::new("/proc")) {
@@ -1710,11 +1722,14 @@ impl eframe::App for App {
                         }
                     }
                     Some(state) => {
-                        if state == LauncherState::Outdated {
-                            let response = ui.button("Update in Steam");
-                            if frame.pressed(ui, Control::UpdateLauncherInSteam, &response, true) {
-                                launcher_change = Some(LauncherChange::Update);
-                            }
+                        let label = if state == LauncherState::Outdated {
+                            "Update in Steam"
+                        } else {
+                            "Update Steam images"
+                        };
+                        let response = ui.button(label);
+                        if frame.pressed(ui, Control::UpdateLauncherInSteam, &response, true) {
+                            launcher_change = Some(LauncherChange::Update);
                         }
                         let response = ui.button("Remove from Steam");
                         if frame.pressed(ui, Control::RemoveLauncherFromSteam, &response, true) {
@@ -2375,6 +2390,7 @@ fn file_name_of(path: &str) -> String {
 }
 
 /// What the toolbar asks to do with the launcher's own Steam shortcut.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum LauncherChange {
     Add,
     Update,
