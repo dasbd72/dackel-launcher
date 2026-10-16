@@ -128,7 +128,10 @@ fn a_fresh_install_puts_both_programs_in_one_folder_and_creates_no_library() {
     assert!(is_executable(&bin.join("dackel-launcher")));
     assert!(is_executable(&bin.join("umu-run")));
     assert_eq!(names_in(&world.install_dir()), ["bin"]);
-    assert_eq!(names_in(&bin), ["dackel-launcher", "umu-run"]);
+    assert_eq!(
+        names_in(&bin),
+        [".installed-by-script", "dackel-launcher", "umu-run"]
+    );
 }
 
 fn desktop_value(desktop: &str, key: &str) -> String {

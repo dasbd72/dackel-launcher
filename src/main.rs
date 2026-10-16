@@ -38,6 +38,7 @@ use dackel_launcher::settings::{self, Settings};
 use dackel_launcher::steam::{self, LauncherState};
 use dackel_launcher::steam_art::{self, IconSource};
 use dackel_launcher::tuning::reset_prefix;
+use dackel_launcher::update::{self, Updater};
 use dackel_launcher::window::{self, RestoreStep, WindowCommand, WindowState};
 use dackel_launcher::winetricks;
 use details::{DetailsView, SteamChange, TuningEdit, details_ui, exe_choices, text_box};
@@ -290,6 +291,8 @@ struct App {
     library_leave: bool,
     search_typing: bool,
     search_leave: bool,
+    updater: Updater,
+    install_method: update::Method,
     /// The popup that is open, if any.
     popup: Option<Popup>,
     /// How far down the details page is scrolled, in points.
@@ -343,6 +346,9 @@ impl App {
             library_leave: false,
             search_typing: false,
             search_leave: false,
+            updater: Updater::new(Arc::new(HttpFetch)),
+            install_method: std::env::current_exe()
+                .map_or(update::Method::Manual, |exe| update::detect(&exe)),
             browser: FileDialog::new()
                 .title("Add a library folder")
                 .opening_mode(OpeningMode::AlwaysInitialDir)
@@ -487,6 +493,19 @@ impl App {
     }
 
     fn collect_reloads(&mut self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        if !self.settings.no_update_check
+            && !self.updater.busy()
+            && *self.updater.state() == update::State::Idle
+            && update::due(self.settings.last_update_check, now)
+        {
+            self.settings.last_update_check = Some(now);
+            self.save_settings();
+            self.updater.start_check();
+        }
+        self.updater.poll();
         // A reload may have replaced the cover, so any blurred copy of it is stale.
         if self.infos.collect() > 0 {
             self.blur_cache.clear();
@@ -1246,6 +1265,12 @@ impl App {
         let mut pick_encoding = None;
         let mut launcher_change = None;
         let mut close = false;
+        let method = self.install_method;
+        let no_check = self.settings.no_update_check;
+        let mut check_now = false;
+        let mut toggle_auto = false;
+        let mut install_version = None;
+        let updater = &self.updater;
         sized_window(ctx, "Settings", 520.0, |ui| {
             ui.strong("Size on screen");
             ui.weak(match system {
@@ -1289,6 +1314,69 @@ impl App {
                 }
             });
 
+            ui.separator();
+            ui.strong("Version");
+            ui.label(format!(
+                "{} ({})",
+                update::VERSION,
+                match method {
+                    update::Method::Script => "installed with the install script",
+                    update::Method::System => "installed as a system package",
+                    update::Method::Manual => "installed by hand",
+                }
+            ));
+            ui.horizontal_wrapped(|ui| {
+                let response =
+                    ui.add_enabled(!updater.busy(), egui::Button::new("Check for updates"));
+                if frame.pressed(ui, Control::CheckUpdates, &response, !updater.busy()) {
+                    check_now = true;
+                }
+                let mut auto = !no_check;
+                let response = ui.checkbox(&mut auto, "Check once a day");
+                frame.register(ui, Control::AutoCheckUpdates, &response);
+                if frame.activated(Control::AutoCheckUpdates) {
+                    auto = !auto;
+                }
+                toggle_auto = auto == no_check;
+            });
+            match updater.state() {
+                update::State::Idle => {}
+                update::State::Checking => {
+                    ui.weak("Checking...");
+                }
+                update::State::UpToDate => {
+                    ui.weak("Up to date.");
+                }
+                update::State::Updating => {
+                    ui.weak("Updating...");
+                }
+                update::State::Updated(v) => {
+                    ui.label(format!("Updated to {v}. Restart to use it."));
+                }
+                update::State::Failed(err) => {
+                    ui.weak(format!("Could not update: {err}"));
+                }
+                update::State::Available(v) => match method {
+                    update::Method::Script => {
+                        ui.label(format!("Version {v} is available."));
+                        let response = ui.button("Update now");
+                        if frame.pressed(ui, Control::UpdateNow, &response, true) {
+                            install_version = Some(v.clone());
+                        }
+                    }
+                    update::Method::System => {
+                        ui.label(format!(
+                            "Version {v} is available: a new package is on the AUR."
+                        ));
+                    }
+                    update::Method::Manual => {
+                        ui.label(format!(
+                            "Version {v} is available: https://github.com/dasbd72/dackel-launcher/releases/latest"
+                        ));
+                    }
+                },
+            }
+
             if let Some(state) = steam {
                 ui.separator();
                 ui.strong("Dackel Launcher in Steam");
@@ -1331,6 +1419,16 @@ impl App {
         }
         if let Some(choice) = pick_encoding {
             self.encoding = choice;
+        }
+        if check_now {
+            self.updater.start_check();
+        }
+        if toggle_auto {
+            self.settings.no_update_check = !no_check;
+            self.save_settings();
+        }
+        if let Some(version) = install_version {
+            self.updater.start_install(version);
         }
         if close && matches!(self.popup, Some(Popup::Settings)) {
             self.popup = None;
@@ -2010,13 +2108,20 @@ impl eframe::App for App {
         let mut steam_request: Option<SteamRequest> = None;
         let mut launcher_change: Option<LauncherChange> = None;
         self.collect_reloads();
-        if self.infos.any_busy() {
+        if self.infos.any_busy() || self.updater.busy() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
         let mut blur_on = self.settings.blur_covers;
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let response = icon_button(ui, Icon::Settings, "Settings", true);
+                if matches!(self.updater.state(), update::State::Available(_)) {
+                    ui.painter().circle_filled(
+                        response.rect.right_top() + egui::vec2(-6.0, 6.0),
+                        4.0,
+                        egui::Color32::from_rgb(90, 170, 255),
+                    );
+                }
                 if frame.pressed(ui, Control::Settings, &response, true) {
                     self.popup = Some(Popup::Settings);
                 }

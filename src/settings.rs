@@ -32,6 +32,10 @@ pub struct Settings {
     pub debounce_ms: Option<u64>,
     /// Extra library folders added on this machine, besides the one beside the binary.
     pub libraries: Vec<PathBuf>,
+    /// Turns the daily check for a newer release off.
+    pub no_update_check: bool,
+    /// When the last check ran (Unix seconds).
+    pub last_update_check: Option<u64>,
 }
 
 /// Loads settings; a missing or unreadable file gives the defaults, so a bad

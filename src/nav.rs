@@ -126,6 +126,12 @@ pub enum Control {
     SettingsDebounce(usize),
     /// A zip encoding, by its slot in `ENCODINGS`.
     SettingsEncoding(usize),
+    /// Looks for a newer release.
+    CheckUpdates,
+    /// Turns the daily automatic check on or off.
+    AutoCheckUpdates,
+    /// Installs the newer release (install.sh installs only).
+    UpdateNow,
     SettingsClose,
 }
 
@@ -139,6 +145,9 @@ impl Control {
                 | Control::SettingsDebounce(_)
                 | Control::SettingsEncoding(_)
                 | Control::SettingsClose
+                | Control::CheckUpdates
+                | Control::AutoCheckUpdates
+                | Control::UpdateNow
                 | Control::AddLauncherToSteam
                 | Control::UpdateLauncherInSteam
                 | Control::RemoveLauncherFromSteam

@@ -29,6 +29,7 @@ pub mod steam_art;
 pub mod steam_input;
 pub mod tuning;
 pub mod umu;
+pub mod update;
 pub mod vdf;
 pub mod window;
 pub mod winetricks;

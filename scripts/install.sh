@@ -69,4 +69,6 @@ mkdir -p "$bin" "$(dirname "$entry")" "$(dirname "$icon")"
 mv -f "$stage/dackel-launcher" "$stage/umu-run" "$bin/"
 mv -f "$stage/$app_id.svg" "$icon"
 mv -f "$stage/entry" "$entry"
+# Tells the program it was installed by this script, so it may update itself.
+: >"$bin/.installed-by-script"
 echo "Installed dackel-launcher and umu-run in $bin"

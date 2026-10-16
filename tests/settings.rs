@@ -23,6 +23,8 @@ fn saved_settings_round_trip_and_create_the_config_folder() {
         fullscreen: Some(true),
         blur_covers: true,
         debounce_ms: Some(50),
+        no_update_check: true,
+        last_update_check: Some(1_700_000_000),
         libraries: vec![PathBuf::from("/mnt/more/Games")],
     };
 
