@@ -35,7 +35,7 @@ use dackel_launcher::settings::{self, Settings};
 use dackel_launcher::steam;
 use dackel_launcher::tuning::reset_prefix;
 use dackel_launcher::window::{self, RestoreStep, WindowCommand, WindowState};
-use details::{DetailsView, TuningEdit, details_ui, exe_choices, text_box};
+use details::{DetailsView, SteamChange, TuningEdit, details_ui, exe_choices, text_box};
 use eframe::egui;
 use egui_file_dialog::{FileDialog, OpeningMode};
 use focus::{FocusFrame, Item, bounds};
@@ -771,20 +771,39 @@ impl App {
         let mut shortcuts = steam::load_shortcuts(&path)?;
         let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
         let mut note = String::new();
-        if request.add {
-            let app_id = steam::add_game(&mut shortcuts, &launcher, &request.dir, &request.title)?;
-            steam::refresh_launcher(&mut shortcuts, &launcher);
-            if let Some(cover) = &request.cover
-                && let Err(err) =
-                    steam::write_grid(cover, &steam::grid_dir(&root, &account), app_id)
-            {
-                note = format!(" (no cover image: {err})");
+        let grid = steam::grid_dir(&root, &account);
+        let verb = match request.change {
+            SteamChange::Add => {
+                let app_id =
+                    steam::add_game(&mut shortcuts, &launcher, &request.dir, &request.title)?;
+                steam::refresh_launcher(&mut shortcuts, &launcher);
+                if let Some(cover) = &request.cover
+                    && let Err(err) = steam::write_grid(cover, &grid, app_id)
+                {
+                    note = format!(" (no cover image: {err})");
+                }
+                "Added"
             }
-        } else if !steam::remove_game(&mut shortcuts, &request.dir) {
-            return Ok(format!("{} has no Steam entry", request.title));
-        }
+            SteamChange::Remove => {
+                if !steam::remove_game(&mut shortcuts, &request.dir) {
+                    return Ok(format!("{} has no Steam entry", request.title));
+                }
+                "Removed"
+            }
+            SteamChange::Images => {
+                let app_id = steam::app_id_of(&shortcuts, &request.dir)
+                    .ok_or("this game has no Steam entry")?;
+                let cover = request.cover.as_deref().ok_or("this game has no cover")?;
+                steam::write_grid(cover, &grid, app_id)
+                    .map_err(|e| format!("could not write the image: {e}"))?;
+                // Only the images changed, so the shortcuts file stays as it is.
+                return Ok(format!(
+                    "Updated the Steam image of {}; restart Steam to see it",
+                    request.title
+                ));
+            }
+        };
         steam::save_shortcuts(&path, &shortcuts).map_err(|e| format!("{}: {e}", path.display()))?;
-        let verb = if request.add { "Added" } else { "Removed" };
         let restart = if steam::steam_running(Path::new("/proc")) {
             "; restart Steam to see it"
         } else {
@@ -1893,12 +1912,12 @@ impl eframe::App for App {
                 if action.toggle_favorite {
                     actions.favorite = Some(id.clone());
                 }
-                if let Some(add) = action.steam {
+                if let Some(change) = action.steam {
                     steam_request = Some(SteamRequest {
                         dir: entry.game.dir.clone(),
                         title: info.map_or_else(|| entry.game.id.clone(), |i| i.title.clone()),
                         cover: cover_for_steam,
-                        add,
+                        change,
                     });
                 }
                 if let Some(exe) = action.choose_exe {
@@ -2328,7 +2347,7 @@ struct SteamRequest {
     dir: PathBuf,
     title: String,
     cover: Option<PathBuf>,
-    add: bool,
+    change: SteamChange,
 }
 
 /// What the details page's Launch options asked for in one frame.

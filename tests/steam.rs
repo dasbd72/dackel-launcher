@@ -371,3 +371,22 @@ mod launcher_entry {
         );
     }
 }
+
+#[test]
+fn writing_the_images_again_replaces_the_old_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let grid = dir.path().join("grid");
+    let cover = dir.path().join("cover.png");
+    image::RgbImage::from_pixel(4, 4, image::Rgb([1, 2, 3]))
+        .save(&cover)
+        .unwrap();
+    write_grid(&cover, &grid, 77).unwrap();
+
+    image::RgbImage::from_pixel(6, 9, image::Rgb([9, 9, 9]))
+        .save(&cover)
+        .unwrap();
+    write_grid(&cover, &grid, 77).unwrap();
+
+    let img = image::open(grid.join("77p.png")).unwrap();
+    assert_eq!((img.width(), img.height()), (6, 9));
+}

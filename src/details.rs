@@ -91,6 +91,15 @@ pub struct DetailsView<'a> {
     pub steam_entry: Option<bool>,
 }
 
+/// What the details page asks to do with the game's Steam entry.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SteamChange {
+    Add,
+    Remove,
+    /// Write the cover into Steam again.
+    Images,
+}
+
 #[derive(Default)]
 pub struct DetailsAction {
     pub back: bool,
@@ -107,8 +116,7 @@ pub struct DetailsAction {
     /// Move controller focus here (the reset prompt came or went).
     pub focus: Option<Control>,
     pub reset_prefix: bool,
-    /// Add the game to Steam (true) or take it out (false).
-    pub steam: Option<bool>,
+    pub steam: Option<SteamChange>,
 }
 
 /// Lists exe candidates as buttons; returns the one clicked, if any.
@@ -349,7 +357,17 @@ pub fn details_ui(
                             };
                             let response = ui.button(label);
                             if frame.pressed(ui, Control::SteamEntry, &response, true) {
-                                action.steam = Some(!has_entry);
+                                action.steam = Some(if has_entry {
+                                    SteamChange::Remove
+                                } else {
+                                    SteamChange::Add
+                                });
+                            }
+                            if has_entry && view.cover.is_some() {
+                                let response = ui.button("Update Steam image");
+                                if frame.pressed(ui, Control::SteamImages, &response, true) {
+                                    action.steam = Some(SteamChange::Images);
+                                }
                             }
                         }
                     });

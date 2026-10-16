@@ -88,6 +88,8 @@ pub enum Control {
     Favorite,
     /// Adds the game to Steam, or takes it out.
     SteamEntry,
+    /// Writes the game's cover into Steam again.
+    SteamImages,
     // Launch options on the details page.
     LaunchOptions,
     EnvBox,
