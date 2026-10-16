@@ -1225,87 +1225,83 @@ impl App {
         let mut pick_encoding = None;
         let mut launcher_change = None;
         let mut close = false;
-        egui::Window::new("Settings")
-            .collapsible(false)
-            .resizable(false)
-            .max_width(ctx.content_rect().width() - 32.0)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                ui.strong("Size on screen");
-                ui.weak(match system {
-                    Some(system) => format!("The window system's own scale is x{system:.2}"),
-                    None => "The window system gave no scale".to_owned(),
-                });
-                ui.horizontal_wrapped(|ui| {
-                    for (i, preset) in window::SCALE_PRESETS.iter().enumerate() {
-                        let on = (size - preset).abs() < 1e-3;
-                        let response = ui.selectable_label(on, format!("{preset:.2}"));
-                        if frame.pressed(ui, Control::SettingsSize(i), &response, true) {
-                            pick_size = Some(*preset);
-                        }
-                    }
-                });
-
-                ui.separator();
-                ui.strong("Press debounce");
-                ui.weak(DEBOUNCE_HELP.trim_start_matches("Press debounce\n"));
-                ui.horizontal_wrapped(|ui| {
-                    for (i, ms) in DEBOUNCE_PRESETS_MS.iter().enumerate() {
-                        let response = ui.selectable_label(*ms == debounce, debounce_label(*ms));
-                        if frame.pressed(ui, Control::SettingsDebounce(i), &response, true) {
-                            pick_debounce = Some(*ms);
-                        }
-                    }
-                });
-
-                ui.separator();
-                ui.strong("Zip encoding");
-                ui.weak(ZIP_ENCODING_HELP.trim_start_matches("Zip encoding\n"));
-                ui.horizontal_wrapped(|ui| {
-                    for (i, choice) in ENCODINGS.iter().enumerate() {
-                        let response =
-                            ui.selectable_label(*choice == encoding, encoding_label(*choice));
-                        if frame.pressed(ui, Control::SettingsEncoding(i), &response, true) {
-                            pick_encoding = Some(*choice);
-                        }
-                    }
-                });
-
-                if let Some(state) = steam {
-                    ui.separator();
-                    ui.strong("Dackel Launcher in Steam");
-                    ui.horizontal_wrapped(|ui| match state {
-                        LauncherState::Absent => {
-                            let response = ui.button("Add to Steam");
-                            if frame.pressed(ui, Control::AddLauncherToSteam, &response, true) {
-                                launcher_change = Some(LauncherChange::Add);
-                            }
-                        }
-                        _ => {
-                            let label = if state == LauncherState::Outdated {
-                                "Update in Steam"
-                            } else {
-                                "Update Steam images"
-                            };
-                            let response = ui.button(label);
-                            if frame.pressed(ui, Control::UpdateLauncherInSteam, &response, true) {
-                                launcher_change = Some(LauncherChange::Update);
-                            }
-                            let response = ui.button("Remove from Steam");
-                            if frame.pressed(ui, Control::RemoveLauncherFromSteam, &response, true)
-                            {
-                                launcher_change = Some(LauncherChange::Remove);
-                            }
-                        }
-                    });
+        sized_window(ctx, "Settings", 520.0, |ui| {
+            ui.strong("Size on screen");
+            ui.weak(match system {
+                Some(system) => {
+                    format!("The window system's own scale is x{system:.2}")
                 }
-
-                ui.separator();
-                let response = ui.button("Close");
-                if frame.pressed(ui, Control::SettingsClose, &response, true) {
-                    close = true;
+                None => "The window system gave no scale".to_owned(),
+            });
+            ui.horizontal_wrapped(|ui| {
+                for (i, preset) in window::SCALE_PRESETS.iter().enumerate() {
+                    let on = (size - preset).abs() < 1e-3;
+                    let response = ui.selectable_label(on, format!("{preset:.2}"));
+                    if frame.pressed(ui, Control::SettingsSize(i), &response, true) {
+                        pick_size = Some(*preset);
+                    }
                 }
             });
+
+            ui.separator();
+            ui.strong("Press debounce");
+            ui.weak(DEBOUNCE_HELP.trim_start_matches("Press debounce\n"));
+            ui.horizontal_wrapped(|ui| {
+                for (i, ms) in DEBOUNCE_PRESETS_MS.iter().enumerate() {
+                    let response = ui.selectable_label(*ms == debounce, debounce_label(*ms));
+                    if frame.pressed(ui, Control::SettingsDebounce(i), &response, true) {
+                        pick_debounce = Some(*ms);
+                    }
+                }
+            });
+
+            ui.separator();
+            ui.strong("Zip encoding");
+            ui.weak(ZIP_ENCODING_HELP.trim_start_matches("Zip encoding\n"));
+            ui.horizontal_wrapped(|ui| {
+                for (i, choice) in ENCODINGS.iter().enumerate() {
+                    let response =
+                        ui.selectable_label(*choice == encoding, encoding_label(*choice));
+                    if frame.pressed(ui, Control::SettingsEncoding(i), &response, true) {
+                        pick_encoding = Some(*choice);
+                    }
+                }
+            });
+
+            if let Some(state) = steam {
+                ui.separator();
+                ui.strong("Dackel Launcher in Steam");
+                ui.horizontal_wrapped(|ui| match state {
+                    LauncherState::Absent => {
+                        let response = ui.button("Add to Steam");
+                        if frame.pressed(ui, Control::AddLauncherToSteam, &response, true) {
+                            launcher_change = Some(LauncherChange::Add);
+                        }
+                    }
+                    _ => {
+                        let label = if state == LauncherState::Outdated {
+                            "Update in Steam"
+                        } else {
+                            "Update Steam images"
+                        };
+                        let response = ui.button(label);
+                        if frame.pressed(ui, Control::UpdateLauncherInSteam, &response, true) {
+                            launcher_change = Some(LauncherChange::Update);
+                        }
+                        let response = ui.button("Remove from Steam");
+                        if frame.pressed(ui, Control::RemoveLauncherFromSteam, &response, true) {
+                            launcher_change = Some(LauncherChange::Remove);
+                        }
+                    }
+                });
+            }
+
+            ui.separator();
+            let response = ui.button("Close");
+            if frame.pressed(ui, Control::SettingsClose, &response, true) {
+                close = true;
+            }
+        });
         if let Some(size) = pick_size {
             self.set_screen_size(size);
         }
@@ -1335,70 +1331,65 @@ impl App {
             .map(|(i, root)| (i, root.clone(), self.libraries.is_offline(root)))
             .collect();
         let error = self.libraries.error().map(str::to_owned);
-        egui::Window::new("Libraries")
-            .collapsible(false)
-            .resizable(false)
-            .max_width(ctx.content_rect().width() - 32.0)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                // The library beside the program is listed only when it was found, and it
-                // cannot be removed. Added libraries are listed even when offline.
-                if rows.is_empty() {
-                    ui.weak("No libraries found.");
-                }
-                for (i, root, offline) in &rows {
-                    let i = *i;
-                    ui.horizontal_wrapped(|ui| {
-                        // The button first, at the left edge, so up/down reaches it.
-                        if i > 0 {
-                            let button = ui.button("Remove");
-                            if frame.pressed(ui, Control::LibraryRemove(i), &button, true) {
-                                remove = Some(i);
-                            }
-                        }
-                        ui.label(root.display().to_string());
-                        if *offline {
-                            ui.colored_label(egui::Color32::YELLOW, "not found");
-                        }
-                        if i == 0 {
-                            ui.weak("(beside the program)");
-                        }
-                    });
-                }
-                ui.separator();
-                ui.label("Add a folder that contains RJ game folders:");
+        sized_window(ctx, "Libraries", 600.0, |ui| {
+            // The library beside the program is listed only when it was found, and it
+            // cannot be removed. Added libraries are listed even when offline.
+            if rows.is_empty() {
+                ui.weak("No libraries found.");
+            }
+            for (i, root, offline) in &rows {
+                let i = *i;
                 ui.horizontal_wrapped(|ui| {
-                    let edit = text_box(
-                        ui,
-                        frame,
-                        Control::LibraryPath,
-                        egui::TextEdit::singleline(self.libraries.input_mut())
-                            .desired_width(420.0_f32.min(ctx.content_rect().width() - 64.0))
-                            .hint_text("/path/to/games"),
-                    );
-                    typing = edit.has_focus();
-                    if std::mem::take(&mut self.library_leave) {
-                        edit.surrender_focus();
-                        typing = false;
+                    // The button first, at the left edge, so up/down reaches it.
+                    if i > 0 {
+                        let button = ui.button("Remove");
+                        if frame.pressed(ui, Control::LibraryRemove(i), &button, true) {
+                            remove = Some(i);
+                        }
                     }
-                    let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let button = ui.button("Add");
-                    if frame.pressed(ui, Control::LibraryAdd, &button, true) || enter {
-                        add = true;
+                    ui.label(root.display().to_string());
+                    if *offline {
+                        ui.colored_label(egui::Color32::YELLOW, "not found");
                     }
-                    let button = ui.button("Browse...");
-                    if frame.pressed(ui, Control::LibraryBrowse, &button, true) {
-                        browse = true;
+                    if i == 0 {
+                        ui.weak("(beside the program)");
                     }
                 });
-                if let Some(err) = &error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, err);
+            }
+            ui.separator();
+            ui.label("Add a folder that contains RJ game folders:");
+            ui.horizontal_wrapped(|ui| {
+                let edit = text_box(
+                    ui,
+                    frame,
+                    Control::LibraryPath,
+                    egui::TextEdit::singleline(self.libraries.input_mut())
+                        .desired_width(420.0_f32.min(ctx.content_rect().width() - 64.0))
+                        .hint_text("/path/to/games"),
+                );
+                typing = edit.has_focus();
+                if std::mem::take(&mut self.library_leave) {
+                    edit.surrender_focus();
+                    typing = false;
                 }
-                let button = ui.button("Close");
-                if frame.pressed(ui, Control::LibraryClose, &button, true) {
-                    close = true;
+                let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let button = ui.button("Add");
+                if frame.pressed(ui, Control::LibraryAdd, &button, true) || enter {
+                    add = true;
+                }
+                let button = ui.button("Browse...");
+                if frame.pressed(ui, Control::LibraryBrowse, &button, true) {
+                    browse = true;
                 }
             });
+            if let Some(err) = &error {
+                ui.colored_label(egui::Color32::LIGHT_RED, err);
+            }
+            let button = ui.button("Close");
+            if frame.pressed(ui, Control::LibraryClose, &button, true) {
+                close = true;
+            }
+        });
         self.library_typing = typing;
         if browse {
             self.browser.pick_directory();
@@ -2524,6 +2515,37 @@ fn picker_window(ctx: &egui::Context, list: &PickerList, selected: usize) -> Opt
 }
 
 /// The last component of a path kept as text, for messages.
+/// A window that is as tall as its content, up to the screen height, and scrolls past that.
+/// egui keeps a window's size and never grows it back after a short screen, so the content's
+/// height from the last frame sets a minimum (a new window id would hide it for a frame).
+fn sized_window(
+    ctx: &egui::Context,
+    name: &str,
+    width: f32,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    let key = egui::Id::new((name, "wanted height"));
+    let max_height = ctx.content_rect().height() - 32.0;
+    let wanted = ctx.data(|d| d.get_temp::<f32>(key)).unwrap_or(0.0);
+    let shown = egui::Window::new(name)
+        .collapsible(false)
+        .resizable(false)
+        .max_width(ctx.content_rect().width() - 32.0)
+        .min_height(wanted.min(max_height))
+        .max_height(max_height)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.set_max_width(width.min(ctx.content_rect().width() - 64.0));
+            let scroll = egui::ScrollArea::vertical()
+                .auto_shrink([false, true])
+                .show(ui, add_contents);
+            (scroll.content_size.y, scroll.inner_rect.height())
+        });
+    if let Some((window, Some((content, viewport)))) = shown.map(|s| (s.response.rect, s.inner)) {
+        ctx.data_mut(|d| d.insert_temp(key, content + window.height() - viewport));
+    }
+}
+
 fn file_name_of(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
