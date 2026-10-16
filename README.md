@@ -20,6 +20,19 @@ See `docs/install-script.md`.
 On Arch, the AUR has `dackel-launcher` (built from source) and `dackel-launcher-bin` (the
 release binary); both are published by `.github/workflows/aur.yml` for every version tag.
 
+## Set up a library
+
+Make a folder for your games, one folder per game named by its RJ code, and put the game's zip
+inside:
+
+```
+Library/
+└── RJ123456/
+    └── RJ123456.zip
+```
+
+Add `Library` with the folder button in the launcher (Libraries), then rescan.
+
 ## License
 
 MIT, see `LICENSE`. The files that the AUR and Flatpak packages install (desktop entry, icon,
