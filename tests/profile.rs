@@ -90,10 +90,11 @@ fn a_clearly_larger_exe_wins_without_asking() {
 }
 
 #[test]
-fn exes_are_searched_three_levels_deep_and_never_inside_the_metadata_folder() {
+fn exes_are_searched_four_levels_deep_and_never_inside_the_metadata_folder() {
     let game = tempfile::tempdir().unwrap();
     file(game.path(), "Bin/x64/Game.exe", 1_000);
     file(game.path(), "A/B/C/D/TooDeep.exe", 100_000_000);
+    file(game.path(), "A/B/C/D/E/TooDeep.exe", 100_000_000);
     file(
         game.path(),
         ".dackel-launcher/wine/drive_c/Prefix.exe",
@@ -106,6 +107,31 @@ fn exes_are_searched_three_levels_deep_and_never_inside_the_metadata_folder() {
         state,
         ExeState::Ready {
             exe: PathBuf::from("Bin/x64/Game.exe")
+        }
+    );
+}
+
+#[test]
+fn a_game_zipped_inside_two_wrapper_folders_is_found() {
+    // The layout of a real release: <code>/<version>/<version>/Game.exe.
+    let game = tempfile::tempdir().unwrap();
+    file(
+        game.path(),
+        "RJ392812/Game-CN-1.12/Game-CN-1.12/Game.exe",
+        100_000_000,
+    );
+    file(
+        game.path(),
+        "RJ392812/Game-CN-1.12/Game-CN-1.12/notification_helper.exe",
+        1_000,
+    );
+
+    let state = ensure(game.path()).unwrap();
+
+    assert_eq!(
+        state,
+        ExeState::Ready {
+            exe: PathBuf::from("RJ392812/Game-CN-1.12/Game-CN-1.12/Game.exe")
         }
     );
 }
