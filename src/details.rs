@@ -87,6 +87,8 @@ pub struct DetailsView<'a> {
     pub extracting: Option<Progress>,
     /// The game's folder, for the winetricks command.
     pub dir: &'a Path,
+    /// Whether the game has an entry in Steam; `None` when Steam was not found.
+    pub steam_entry: Option<bool>,
 }
 
 #[derive(Default)]
@@ -105,6 +107,8 @@ pub struct DetailsAction {
     /// Move controller focus here (the reset prompt came or went).
     pub focus: Option<Control>,
     pub reset_prefix: bool,
+    /// Add the game to Steam (true) or take it out (false).
+    pub steam: Option<bool>,
 }
 
 /// Lists exe candidates as buttons; returns the one clicked, if any.
@@ -336,6 +340,17 @@ pub fn details_ui(
                             icon_text_button(ui, Icon::Heart { filled: favorite }, label, true);
                         if frame.pressed(ui, Control::Favorite, &response, true) {
                             action.toggle_favorite = true;
+                        }
+                        if let Some(has_entry) = view.steam_entry {
+                            let label = if has_entry {
+                                "Remove from Steam"
+                            } else {
+                                "Add to Steam"
+                            };
+                            let response = ui.button(label);
+                            if frame.pressed(ui, Control::SteamEntry, &response, true) {
+                                action.steam = Some(!has_entry);
+                            }
                         }
                     });
                     if let Some(err) = view.error {
@@ -585,6 +600,7 @@ mod tests {
             running: false,
             extracting: None,
             dir: &dir,
+            steam_entry: None,
         };
         let ctx = egui::Context::default();
         let mut items = Vec::new();

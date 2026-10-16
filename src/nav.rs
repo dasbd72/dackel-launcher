@@ -84,6 +84,8 @@ pub enum Control {
     Extract,
     CancelExtract,
     Favorite,
+    /// Adds the game to Steam, or takes it out.
+    SteamEntry,
     // Launch options on the details page.
     LaunchOptions,
     EnvBox,

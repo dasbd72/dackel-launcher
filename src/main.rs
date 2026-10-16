@@ -6,10 +6,12 @@ mod icons;
 use covers::{BlurCache, CoverView};
 use dackel_launcher::actions::{Actions, Exclusive};
 use dackel_launcher::browse::{self, Card, Query, Sort};
+use dackel_launcher::cli;
 use dackel_launcher::cursor::{Cursor, Page, Slot, Target};
 use dackel_launcher::extract::{self, Encoding, Existing, Progress, Status};
 use dackel_launcher::fetch::HttpFetch;
 use dackel_launcher::fonts;
+use dackel_launcher::headless;
 use dackel_launcher::info::{GameInfo, cover_path, load};
 use dackel_launcher::jobs::{Cancelled, ExtractJob, JobStatus, Jobs, OverwriteCheck};
 use dackel_launcher::launch::{Launcher, UmuSpawner, unix_now};
@@ -30,6 +32,7 @@ use dackel_launcher::profile::{self, ExeState, Stats};
 use dackel_launcher::proton::{self, ProtonChoice};
 use dackel_launcher::reload::Infos;
 use dackel_launcher::settings::{self, Settings};
+use dackel_launcher::steam;
 use dackel_launcher::tuning::reset_prefix;
 use dackel_launcher::window::{self, RestoreStep, WindowCommand, WindowState};
 use details::{DetailsView, TuningEdit, details_ui, exe_choices, text_box};
@@ -44,13 +47,17 @@ use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
 fn main() -> eframe::Result {
-    let override_dir = match parse_library_override() {
-        Ok(dir) => dir,
+    let args = match cli::parse(std::env::args().skip(1)) {
+        Ok(args) => args,
         Err(msg) => {
             eprintln!("{msg}");
             std::process::exit(2);
         }
     };
+    if let Some(game_dir) = &args.launch {
+        std::process::exit(launch_without_window(game_dir));
+    }
+    let override_dir = args.library;
     let exe = std::env::current_exe().expect("cannot determine executable path");
     let library = match resolve_library(&exe, override_dir.as_deref()) {
         Ok(dir) => dir,
@@ -184,20 +191,33 @@ fn install_japanese_font(ctx: &egui::Context) {
     ctx.set_fonts(definitions);
 }
 
-fn parse_library_override() -> Result<Option<PathBuf>, String> {
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        let value = if arg == "--library" {
-            args.next().ok_or("--library requires a path")?
-        } else if let Some(value) = arg.strip_prefix("--library=") {
-            value.to_owned()
-        } else {
-            continue;
-        };
-        let path = std::path::absolute(&value).map_err(|e| format!("bad --library path: {e}"))?;
-        return Ok(Some(path));
+/// `--launch <game folder>`, as a Steam entry runs it: start the game with its saved Proton
+/// and launch options, and stay until it ends so Steam and the play time see it.
+fn launch_without_window(game_dir: &Path) -> i32 {
+    let pin = profile::read_tuning(game_dir).ok().and_then(|t| t.proton);
+    let proton = match proton::resolve_for_game_default(pin.as_deref()) {
+        Ok(choice) => {
+            if let ProtonChoice::Mismatch { pinned, .. } = &choice {
+                eprintln!("Proton {pinned} is not installed here; using the newest instead");
+            }
+            headless::proton_for(choice)
+        }
+        Err(err) => {
+            eprintln!("launch failed: {err}");
+            return 1;
+        }
+    };
+    let mut launcher = Launcher::new(UmuSpawner);
+    if let Err(err) = headless::run(&mut launcher, game_dir, proton.as_deref(), unix_now()) {
+        eprintln!("launch failed: {err}");
+        return 1;
     }
-    Ok(None)
+    headless::wait(
+        &mut launcher,
+        || std::thread::sleep(Duration::from_secs(1)),
+        unix_now,
+    );
+    0
 }
 
 struct Entry {
@@ -233,6 +253,10 @@ struct App {
     libraries: LibraryList,
     /// The folder browser opened by "Browse..." in the Libraries window.
     browser: FileDialog,
+    /// Steam's folder, when Steam is installed for this user.
+    steam_root: Option<PathBuf>,
+    /// Whether the game on the details page has a Steam entry (game folder, answer).
+    steam_cache: std::cell::RefCell<Option<(PathBuf, bool)>>,
     /// A text box of the Libraries window has the keyboard; the pad's B and up/down leave it.
     library_typing: bool,
     /// Leave that text box at the next draw.
@@ -278,6 +302,9 @@ impl App {
         startup.settings.libraries = added;
         let mut app = App {
             libraries,
+            steam_root: std::env::var_os("HOME")
+                .and_then(|home| steam::steam_root(Path::new(&home))),
+            steam_cache: std::cell::RefCell::new(None),
             library_typing: false,
             library_leave: false,
             browser: FileDialog::new()
@@ -660,6 +687,63 @@ impl App {
             }
             PromptOption::Version(path) => self.launch_with_other_proton(Some(path)),
         }
+    }
+
+    /// Whether the game has a Steam entry; `None` when Steam was not found.
+    fn steam_entry(&self, dir: &Path) -> Option<bool> {
+        let root = self.steam_root.as_ref()?;
+        let mut cache = self.steam_cache.borrow_mut();
+        if let Some((cached, has)) = &*cache
+            && cached == dir
+        {
+            return Some(*has);
+        }
+        let has = steam::account_with_newest(&steam::accounts(root))
+            .and_then(|account| steam::load_shortcuts(&steam::shortcuts_path(root, &account)).ok())
+            .is_some_and(|shortcuts| steam::app_id_of(&shortcuts, dir).is_some());
+        *cache = Some((dir.to_path_buf(), has));
+        Some(has)
+    }
+
+    /// Adds the game to Steam, or takes it out, and says what happened.
+    fn set_steam_entry(&mut self, request: SteamRequest) {
+        self.steam_cache.replace(None);
+        self.message = Some(match self.write_steam_entry(&request) {
+            Ok(done) => done,
+            Err(err) => format!("Steam: {err}"),
+        });
+    }
+
+    fn write_steam_entry(&self, request: &SteamRequest) -> Result<String, String> {
+        let root = self.steam_root.as_ref().ok_or("Steam was not found")?;
+        let account = steam::account_with_newest(&steam::accounts(root))
+            .ok_or("no Steam account was found")?;
+        let path = steam::shortcuts_path(root, &account);
+        let mut shortcuts = steam::load_shortcuts(&path)?;
+        let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
+        let mut note = String::new();
+        if request.add {
+            let app_id = steam::add_game(&mut shortcuts, &launcher, &request.dir, &request.title)?;
+            steam::refresh_launcher(&mut shortcuts, &launcher);
+            if let Some(cover) = &request.cover
+                && let Err(err) = steam::write_grid(cover, &steam::grid_dir(root, &account), app_id)
+            {
+                note = format!(" (no cover image: {err})");
+            }
+        } else if !steam::remove_game(&mut shortcuts, &request.dir) {
+            return Ok(format!("{} has no Steam entry", request.title));
+        }
+        steam::save_shortcuts(&path, &shortcuts).map_err(|e| format!("{}: {e}", path.display()))?;
+        let verb = if request.add { "Added" } else { "Removed" };
+        let restart = if steam::steam_running(Path::new("/proc")) {
+            "; restart Steam to see it"
+        } else {
+            ""
+        };
+        Ok(format!(
+            "{verb} {} in Steam (account {account}){note}{restart}",
+            request.title
+        ))
     }
 
     fn toggle_favorite(&mut self, id: &str) {
@@ -1513,6 +1597,7 @@ impl eframe::App for App {
 
         let mut actions = Actions::default();
         let mut tuning_action: Option<TuningResult> = None;
+        let mut steam_request: Option<SteamRequest> = None;
         self.collect_reloads();
         if self.infos.any_busy() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
@@ -1691,6 +1776,7 @@ impl eframe::App for App {
                 let cover_view =
                     self.blur_cache
                         .cover_view(&ctx, self.settings.blur_covers, cover.as_deref());
+                let cover_for_steam = cover.clone();
                 let view = DetailsView {
                     id: &entry.game.id,
                     library: self.library_label(&entry.game),
@@ -1709,6 +1795,7 @@ impl eframe::App for App {
                     running: self.launcher.is_running(&entry.game.dir),
                     extracting: self.jobs.progress(&entry.game.dir_key()),
                     dir: &entry.game.dir,
+                    steam_entry: self.steam_entry(&entry.game.dir),
                 };
                 if self.tuning_edit.as_ref().is_none_or(|e| e.key != *id) {
                     self.tuning_edit = Some(TuningEdit::load(id.clone(), &entry.game.dir));
@@ -1748,6 +1835,14 @@ impl eframe::App for App {
                 }
                 if action.toggle_favorite {
                     actions.favorite = Some(id.clone());
+                }
+                if let Some(add) = action.steam {
+                    steam_request = Some(SteamRequest {
+                        dir: entry.game.dir.clone(),
+                        title: info.map_or_else(|| entry.game.id.clone(), |i| i.title.clone()),
+                        cover: cover_for_steam,
+                        add,
+                    });
                 }
                 if let Some(exe) = action.choose_exe {
                     actions.details_choice = Some((entry.game.dir.clone(), exe));
@@ -1878,6 +1973,9 @@ impl eframe::App for App {
         }
         if let Some(result) = tuning_action {
             self.apply_tuning(result);
+        }
+        if let Some(request) = steam_request {
+            self.set_steam_entry(request);
         }
 
         self.cursor.end_frame(
@@ -2163,6 +2261,14 @@ fn file_name_of(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
         .map_or_else(|| path.to_owned(), |n| n.to_string_lossy().into_owned())
+}
+
+/// A request from the details page to add a game to Steam or take it out.
+struct SteamRequest {
+    dir: PathBuf,
+    title: String,
+    cover: Option<PathBuf>,
+    add: bool,
 }
 
 /// What the details page's Launch options asked for in one frame.
