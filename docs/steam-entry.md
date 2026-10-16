@@ -17,6 +17,7 @@ The details page of a game has **Add to Steam** / **Remove from Steam** when Ste
   Restart Steam to see the entry, and add entries with Steam closed to be safe.
 - **Moving the launcher:** adding any entry rewrites the program path of all our entries.
 
-- **The launcher itself:** an **Add to Steam** button in the toolbar adds a shortcut that starts
-  the launcher, unless Steam already has one for it (including one made by hand); then the button
-  is hidden.
+- **The launcher itself:** the toolbar has **Add to Steam** when Steam has no shortcut for the launcher.
+  Once there is one (including one made by hand), it shows **Remove from Steam**, and **Update in
+  Steam** when the launcher has moved since (the shortcut keeps its app id and name). A shortcut is
+  the launcher's when it has no launch options and its program is named `dackel-launcher`.

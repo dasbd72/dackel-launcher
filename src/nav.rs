@@ -64,6 +64,10 @@ pub enum Control {
     Libraries,
     /// Adds the launcher itself to Steam.
     AddLauncherToSteam,
+    /// Points the launcher's Steam shortcut at where the launcher is now.
+    UpdateLauncherInSteam,
+    /// Takes the launcher's shortcut out of Steam.
+    RemoveLauncherFromSteam,
     /// On the empty-state page, opens the Libraries window.
     AddLibrary,
     /// On the empty-state page, creates the missing library folder.

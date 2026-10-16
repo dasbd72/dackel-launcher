@@ -140,26 +140,57 @@ pub fn add_game(
     Ok(id)
 }
 
-fn is_launcher_entry(entry: &Value, quoted_exe: &str) -> bool {
-    entry.get("Exe").and_then(Value::as_str) == Some(quoted_exe)
-        && entry.get("LaunchOptions").and_then(Value::as_str) == Some("")
+/// A shortcut that starts the launcher itself: no launch options, and a program named like
+/// the launcher, wherever it was when the shortcut was made.
+fn is_launcher_entry(entry: &Value) -> bool {
+    entry.get("LaunchOptions").and_then(Value::as_str) == Some("")
+        && entry
+            .get("Exe")
+            .and_then(Value::as_str)
+            .is_some_and(|exe| exe.trim_matches('"').rsplit('/').next() == Some("dackel-launcher"))
 }
 
-/// Whether Steam already has a shortcut that starts the launcher itself.
-pub fn has_launcher(root: &Value, launcher: &Path) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LauncherState {
+    /// Steam has no shortcut for the launcher.
+    Absent,
+    /// It has one, and it points at this launcher.
+    Current,
+    /// It has one, but the launcher has moved since.
+    Outdated,
+}
+
+pub fn launcher_state(root: &Value, launcher: &Path) -> LauncherState {
     let exe = quoted(launcher);
-    root.get("shortcuts")
-        .is_some_and(|s| s.items().iter().any(|(_, e)| is_launcher_entry(e, &exe)))
+    let Some(list) = root.get("shortcuts") else {
+        return LauncherState::Absent;
+    };
+    let ours: Vec<_> = list
+        .items()
+        .iter()
+        .map(|(_, e)| e)
+        .filter(|e| is_launcher_entry(e))
+        .collect();
+    if ours.is_empty() {
+        LauncherState::Absent
+    } else if ours
+        .iter()
+        .all(|e| e.get("Exe").and_then(Value::as_str) == Some(&exe))
+    {
+        LauncherState::Current
+    } else {
+        LauncherState::Outdated
+    }
 }
 
-/// Adds a shortcut that starts the launcher, unless one exists (even one the user made).
-/// Returns its app id and whether it was created.
+/// Adds a shortcut that starts the launcher, unless one exists (even one the user made, or
+/// one for an older place of the launcher). Returns its app id and whether it was created.
 pub fn add_launcher(root: &mut Value, launcher: &Path) -> (u32, bool) {
     let exe = quoted(launcher);
     let list = list_mut(root);
     if let Some(id) = list
         .iter()
-        .find(|(_, e)| is_launcher_entry(e, &exe))
+        .find(|(_, e)| is_launcher_entry(e))
         .and_then(|(_, e)| match e.get("appid") {
             Some(Value::U32(id)) => Some(*id),
             _ => None,
@@ -177,6 +208,33 @@ pub fn add_launcher(root: &mut Value, launcher: &Path) -> (u32, bool) {
     let start = quoted(launcher.parent().unwrap_or(Path::new("/")));
     list.push((next.to_string(), new_entry(id, name, &exe, &start, "")));
     (id, true)
+}
+
+/// Points every shortcut for the launcher at its current place. Returns how many changed.
+pub fn update_launcher(root: &mut Value, launcher: &Path) -> usize {
+    let exe = quoted(launcher);
+    let start = quoted(launcher.parent().unwrap_or(Path::new("/")));
+    let mut changed = 0;
+    for (_, entry) in list_mut(root).iter_mut() {
+        if !is_launcher_entry(entry) || entry.get("Exe").and_then(Value::as_str) == Some(&exe) {
+            continue;
+        }
+        set(entry, "Exe", Value::Str(exe.clone()));
+        set(entry, "StartDir", Value::Str(start.clone()));
+        changed += 1;
+    }
+    changed
+}
+
+/// Takes out the shortcuts for the launcher and numbers the rest again. False when none.
+pub fn remove_launcher(root: &mut Value) -> bool {
+    let list = list_mut(root);
+    let before = list.len();
+    list.retain(|(_, e)| !is_launcher_entry(e));
+    for (i, (key, _)) in list.iter_mut().enumerate() {
+        *key = i.to_string();
+    }
+    list.len() != before
 }
 
 /// The app id of a game's entry, if it has one.

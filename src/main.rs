@@ -32,7 +32,7 @@ use dackel_launcher::profile::{self, ExeState, Stats};
 use dackel_launcher::proton::{self, ProtonChoice};
 use dackel_launcher::reload::Infos;
 use dackel_launcher::settings::{self, Settings};
-use dackel_launcher::steam;
+use dackel_launcher::steam::{self, LauncherState};
 use dackel_launcher::tuning::reset_prefix;
 use dackel_launcher::window::{self, RestoreStep, WindowCommand, WindowState};
 use details::{DetailsView, SteamChange, TuningEdit, details_ui, exe_choices, text_box};
@@ -257,8 +257,8 @@ struct App {
     steam_root: Option<PathBuf>,
     /// Whether the game on the details page has a Steam entry (game folder, answer).
     steam_cache: std::cell::RefCell<Option<(PathBuf, bool)>>,
-    /// Whether Steam has a shortcut that starts the launcher itself.
-    launcher_cache: std::cell::Cell<Option<bool>>,
+    /// What Steam has for the launcher itself.
+    launcher_cache: std::cell::Cell<Option<LauncherState>>,
     /// A text box of the Libraries window has the keyboard; the pad's B and up/down leave it.
     library_typing: bool,
     /// Leave that text box at the next draw.
@@ -717,32 +717,49 @@ impl App {
         Ok((root, path, account))
     }
 
-    /// Whether Steam has a shortcut for the launcher; `None` when Steam was not found.
-    fn launcher_in_steam(&self) -> Option<bool> {
+    /// What Steam has for the launcher; `None` when Steam was not found.
+    fn launcher_in_steam(&self) -> Option<LauncherState> {
         self.steam_root.as_ref()?;
         if let Some(known) = self.launcher_cache.get() {
             return Some(known);
         }
-        let has = std::env::current_exe().is_ok_and(|launcher| {
-            self.steam_shortcuts()
-                .and_then(|(_, path, _)| steam::load_shortcuts(&path))
-                .is_ok_and(|shortcuts| steam::has_launcher(&shortcuts, &launcher))
-        });
-        self.launcher_cache.set(Some(has));
-        Some(has)
+        let state = std::env::current_exe()
+            .ok()
+            .and_then(|launcher| {
+                let (_, path, _) = self.steam_shortcuts().ok()?;
+                let shortcuts = steam::load_shortcuts(&path).ok()?;
+                Some(steam::launcher_state(&shortcuts, &launcher))
+            })
+            .unwrap_or(LauncherState::Absent);
+        self.launcher_cache.set(Some(state));
+        Some(state)
     }
 
-    /// Adds a shortcut that starts the launcher itself, and says what happened.
-    fn add_launcher_to_steam(&mut self) {
+    /// Adds, updates or removes the launcher's own shortcut, and says what happened.
+    fn change_launcher_in_steam(&mut self, change: LauncherChange) {
         self.launcher_cache.set(None);
         let done = (|| {
             let (_, path, account) = self.steam_shortcuts()?;
             let mut shortcuts = steam::load_shortcuts(&path)?;
             let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
-            let (_, created) = steam::add_launcher(&mut shortcuts, &launcher);
-            if !created {
-                return Ok("Dackel Launcher is already in Steam".to_owned());
-            }
+            let verb = match change {
+                LauncherChange::Add => {
+                    if !steam::add_launcher(&mut shortcuts, &launcher).1 {
+                        return Ok("Dackel Launcher is already in Steam".to_owned());
+                    }
+                    "Added"
+                }
+                LauncherChange::Update => {
+                    steam::update_launcher(&mut shortcuts, &launcher);
+                    "Updated"
+                }
+                LauncherChange::Remove => {
+                    if !steam::remove_launcher(&mut shortcuts) {
+                        return Ok("Dackel Launcher is not in Steam".to_owned());
+                    }
+                    "Removed"
+                }
+            };
             steam::save_shortcuts(&path, &shortcuts)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
             let restart = if steam::steam_running(Path::new("/proc")) {
@@ -751,7 +768,7 @@ impl App {
                 ""
             };
             Ok::<_, String>(format!(
-                "Added Dackel Launcher to Steam (account {account}){restart}"
+                "{verb} Dackel Launcher in Steam (account {account}){restart}"
             ))
         })();
         self.message = Some(done.unwrap_or_else(|err| format!("Steam: {err}")));
@@ -1667,7 +1684,7 @@ impl eframe::App for App {
         let mut actions = Actions::default();
         let mut tuning_action: Option<TuningResult> = None;
         let mut steam_request: Option<SteamRequest> = None;
-        let mut add_launcher = false;
+        let mut launcher_change: Option<LauncherChange> = None;
         self.collect_reloads();
         if self.infos.any_busy() {
             ui.ctx().request_repaint_after(Duration::from_millis(100));
@@ -1685,11 +1702,26 @@ impl eframe::App for App {
                 if frame.pressed(ui, Control::Libraries, &response, true) {
                     self.popup = Some(Popup::Libraries);
                 }
-                if self.launcher_in_steam() == Some(false) {
-                    let response = ui.button("Add to Steam");
-                    if frame.pressed(ui, Control::AddLauncherToSteam, &response, true) {
-                        add_launcher = true;
+                match self.launcher_in_steam() {
+                    Some(LauncherState::Absent) => {
+                        let response = ui.button("Add to Steam");
+                        if frame.pressed(ui, Control::AddLauncherToSteam, &response, true) {
+                            launcher_change = Some(LauncherChange::Add);
+                        }
                     }
+                    Some(state) => {
+                        if state == LauncherState::Outdated {
+                            let response = ui.button("Update in Steam");
+                            if frame.pressed(ui, Control::UpdateLauncherInSteam, &response, true) {
+                                launcher_change = Some(LauncherChange::Update);
+                            }
+                        }
+                        let response = ui.button("Remove from Steam");
+                        if frame.pressed(ui, Control::RemoveLauncherFromSteam, &response, true) {
+                            launcher_change = Some(LauncherChange::Remove);
+                        }
+                    }
+                    None => {}
                 }
                 let response = ui.button("Fullscreen");
                 actions.fullscreen = frame.pressed(ui, Control::Fullscreen, &response, true);
@@ -2053,8 +2085,8 @@ impl eframe::App for App {
         if let Some(request) = steam_request {
             self.set_steam_entry(request);
         }
-        if add_launcher {
-            self.add_launcher_to_steam();
+        if let Some(change) = launcher_change {
+            self.change_launcher_in_steam(change);
         }
 
         self.cursor.end_frame(
@@ -2340,6 +2372,13 @@ fn file_name_of(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
         .map_or_else(|| path.to_owned(), |n| n.to_string_lossy().into_owned())
+}
+
+/// What the toolbar asks to do with the launcher's own Steam shortcut.
+enum LauncherChange {
+    Add,
+    Update,
+    Remove,
 }
 
 /// A request from the details page to add a game to Steam or take it out.

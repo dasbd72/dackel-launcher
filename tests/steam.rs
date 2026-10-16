@@ -311,7 +311,7 @@ mod files {
 
 mod launcher_entry {
     use super::*;
-    use dackel_launcher::steam::{add_launcher, has_launcher};
+    use dackel_launcher::steam::{LauncherState, add_launcher, launcher_state};
 
     #[test]
     fn the_launcher_is_added_once_with_no_launch_options() {
@@ -328,7 +328,7 @@ mod launcher_entry {
         assert_eq!(text(all[1], "AppName"), "Dackel Launcher");
         assert_eq!(text(all[1], "Exe"), "\"/opt/dackel/dackel-launcher\"");
         assert_eq!(text(all[1], "LaunchOptions"), "");
-        assert!(has_launcher(&root, &launcher()));
+        assert_eq!(launcher_state(&root, &launcher()), LauncherState::Current);
     }
 
     #[test]
@@ -361,12 +361,13 @@ mod launcher_entry {
         let mut root = new_shortcuts();
         add_game(&mut root, &launcher(), Path::new("/games/RJ1"), "One").unwrap();
 
-        assert!(!has_launcher(&root, &launcher()));
+        assert_eq!(launcher_state(&root, &launcher()), LauncherState::Absent);
         let (_, created) = add_launcher(&mut root, &launcher());
         assert!(created);
         assert!(remove_game(&mut root, Path::new("/games/RJ1")));
-        assert!(
-            has_launcher(&root, &launcher()),
+        assert_eq!(
+            launcher_state(&root, &launcher()),
+            LauncherState::Current,
             "removing a game leaves the launcher"
         );
     }
@@ -389,4 +390,73 @@ fn writing_the_images_again_replaces_the_old_ones() {
 
     let img = image::open(grid.join("77p.png")).unwrap();
     assert_eq!((img.width(), img.height()), (6, 9));
+}
+
+mod launcher_upkeep {
+    use super::*;
+    use dackel_launcher::steam::{
+        LauncherState, add_launcher, launcher_state, remove_launcher, update_launcher,
+    };
+
+    fn moved() -> PathBuf {
+        PathBuf::from("/new/place/dackel-launcher")
+    }
+
+    #[test]
+    fn the_state_is_absent_current_or_outdated() {
+        let mut root = new_shortcuts();
+        assert_eq!(launcher_state(&root, &launcher()), LauncherState::Absent);
+
+        add_launcher(&mut root, &launcher());
+        assert_eq!(launcher_state(&root, &launcher()), LauncherState::Current);
+        assert_eq!(launcher_state(&root, &moved()), LauncherState::Outdated);
+    }
+
+    #[test]
+    fn updating_writes_the_new_path_and_keeps_the_app_id_and_name() {
+        let mut root = with_users_own();
+        let (id, _) = add_launcher(&mut root, &launcher());
+
+        assert_eq!(update_launcher(&mut root, &moved()), 1);
+
+        let ours = entries(&root)[1];
+        assert_eq!(text(ours, "Exe"), "\"/new/place/dackel-launcher\"");
+        assert_eq!(text(ours, "StartDir"), "\"/new/place\"");
+        assert_eq!(text(ours, "AppName"), "Dackel Launcher");
+        assert_eq!(ours.get("appid"), Some(&Value::U32(id)));
+        assert_eq!(launcher_state(&root, &moved()), LauncherState::Current);
+        assert_eq!(
+            update_launcher(&mut root, &moved()),
+            0,
+            "nothing left to change"
+        );
+        assert_eq!(entries(&root)[0], &users_own());
+    }
+
+    #[test]
+    fn a_moved_launcher_is_not_added_a_second_time() {
+        let mut root = new_shortcuts();
+        add_launcher(&mut root, &launcher());
+
+        let (_, created) = add_launcher(&mut root, &moved());
+
+        assert!(!created);
+        assert_eq!(entries(&root).len(), 1);
+    }
+
+    #[test]
+    fn removing_takes_the_launcher_entries_only() {
+        let mut root = with_users_own();
+        add_launcher(&mut root, &launcher());
+        add_game(&mut root, &launcher(), Path::new("/games/RJ1"), "One").unwrap();
+
+        assert!(remove_launcher(&mut root));
+
+        let all = entries(&root);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0], &users_own());
+        assert_eq!(text(all[1], "AppName"), "One");
+        assert_eq!(launcher_state(&root, &launcher()), LauncherState::Absent);
+        assert!(!remove_launcher(&mut root));
+    }
 }
