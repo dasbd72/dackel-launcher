@@ -1,12 +1,16 @@
 # Dackel Launcher
 
-A game library for Linux and the Steam Deck. It lists your game folders, extracts zip downloads
+A game library for Linux and the Steam Deck that you can carry on a drive. It lists your game folders, extracts zip downloads
 and starts each game through [umu](https://github.com/Open-Wine-Components/umu-launcher) and
 Proton. Folders can have any name; `RJ…` (DLsite) and `RA…` (072Project) names also get store
 info and covers.
 
 ## Highlights
 
+- **Portable.** Everything a game needs (its settings, Wine prefix, saves, cover and info) lives
+  in its own folder, so the library moves between your desktop and the Deck with the games. Put
+  the launcher and `umu-run` beside a `DLSiteLibrary` folder and run it from the drive.
+  Per-machine settings such as UI size stay on each computer.
 - **Made for the couch.** Works with a gamepad, a mouse or a keyboard, on the desktop and the
   Steam Deck.
 - **One folder per game.** Scans libraries on several drives or SD cards at once, with search,
@@ -47,7 +51,8 @@ Library/
     └── RJ123456.zip
 ```
 
-Add `Library` with the folder button in the launcher (Libraries), then rescan.
+A folder named `DLSiteLibrary` beside the launcher is found automatically. For any other folder,
+add it with the folder button in the launcher (Libraries), then rescan.
 
 ## Release build
 
