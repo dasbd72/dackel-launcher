@@ -47,6 +47,7 @@ pub struct TuningEdit {
     /// Verbs already installed into this game's prefix.
     pub installed: Vec<String>,
     confirm_reset: bool,
+    confirm_delete: bool,
     /// Proton versions installed here, for the per-game choice.
     pub proton_versions: Vec<String>,
     /// The Proton version chosen for this game; `None` is automatic.
@@ -77,6 +78,7 @@ impl TuningEdit {
             install_error: None,
             installed: profile::read_winetricks(game_dir).unwrap_or_default(),
             confirm_reset: false,
+            confirm_delete: false,
             proton_versions: proton::selectable(&proton::compat_dir()).unwrap_or_default(),
             pin: tuning.proton,
             steam_icon: profile::read_steam_icon(game_dir).unwrap_or_default(),
@@ -151,6 +153,8 @@ pub struct DetailsAction {
     /// Move controller focus here (the reset prompt came or went).
     pub focus: Option<Control>,
     pub reset_prefix: bool,
+    /// Erase the game's folder (already confirmed).
+    pub delete_game: bool,
     /// Winetricks verbs to install into the prefix.
     pub install: Option<Vec<String>>,
     pub steam: Option<SteamChange>,
@@ -421,6 +425,7 @@ pub fn details_ui(
                     ui.colored_label(egui::Color32::LIGHT_RED, err);
                 }
                 launch_options(ui, view, frame, edit, &mut action);
+                delete_game_section(ui, view, frame, edit, &mut action);
             };
             if stacked {
                 draw_cover(ui, view, cover_width);
@@ -607,6 +612,52 @@ pub fn text_box(
 
 /// Per-game env and arguments, the Proton choice, winetricks installs and Prefix reset.
 /// Everything in it can be focused with the controller.
+/// The Delete game button; it asks first, with focus on the safe answer.
+fn delete_game_section(
+    ui: &mut egui::Ui,
+    view: &DetailsView,
+    frame: &mut FocusFrame,
+    edit: &mut TuningEdit,
+    action: &mut DetailsAction,
+) {
+    let busy = view.running || view.extracting.is_some() || view.installing;
+    ui.separator();
+    if edit.confirm_delete {
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "Delete this game? Its whole folder is erased, including the Wine prefix and \
+             anything stored in it, such as saves. This cannot be undone.",
+        );
+        ui.horizontal(|ui| {
+            if edit.focus.take() == Some(Control::KeepGame) {
+                action.focus = Some(Control::KeepGame);
+            }
+            let delete = ui.add_enabled(!busy, egui::Button::new("Delete game"));
+            if frame.pressed(ui, Control::ConfirmDeleteGame, &delete, !busy) {
+                action.delete_game = true;
+                edit.confirm_delete = false;
+            }
+            let keep = form_button(ui, "Keep it", true);
+            if frame.pressed(ui, Control::KeepGame, &keep, true) {
+                edit.confirm_delete = false;
+                edit.focus = Some(Control::DeleteGame);
+            }
+        });
+    } else {
+        if edit.focus.take() == Some(Control::DeleteGame) {
+            action.focus = Some(Control::DeleteGame);
+        }
+        let delete = ui.add_enabled(!busy, egui::Button::new("Delete game..."));
+        if frame.pressed(ui, Control::DeleteGame, &delete, !busy) {
+            edit.confirm_delete = true;
+            edit.focus = Some(Control::KeepGame);
+        }
+    }
+    if busy {
+        ui.weak("Wait for the game to stop and its work to finish first.");
+    }
+}
+
 fn launch_options(
     ui: &mut egui::Ui,
     view: &DetailsView,

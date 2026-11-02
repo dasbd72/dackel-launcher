@@ -19,7 +19,7 @@ use dackel_launcher::info::{GameInfo, cover_path, load};
 use dackel_launcher::jobs::{Cancelled, ExtractJob, JobStatus, Jobs, OverwriteCheck};
 use dackel_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dackel_launcher::library::{
-    Game, Store, browser_start, library_labels, resolve_library, scan_all, store_of,
+    Game, Store, browser_start, delete_game, library_labels, resolve_library, scan_all, store_of,
 };
 use dackel_launcher::library_list::LibraryList;
 use dackel_launcher::nav::{
@@ -1027,6 +1027,7 @@ impl App {
             save,
             set_proton,
             reset_prefix: reset,
+            delete,
             install,
         } = result;
         if let Some((env, args)) = save {
@@ -1055,6 +1056,9 @@ impl App {
         if let Some(verbs) = install {
             self.start_winetricks(&dir, &id, verbs);
         }
+        if delete {
+            self.delete_game(&dir, &id);
+        }
         if reset {
             self.message = Some(if self.launcher.is_running(&dir) {
                 "Close the game before resetting its prefix".to_owned()
@@ -1072,6 +1076,42 @@ impl App {
                 }
             });
         }
+    }
+
+    /// Erases the game's folder, after taking its Steam entry out (which is found by the folder).
+    fn delete_game(&mut self, dir: &Path, id: &str) {
+        if self.launcher.is_running(dir)
+            || self.winetricks_jobs.contains_key(dir)
+            || self.jobs.progress(&dir.to_string_lossy()).is_some()
+        {
+            self.message = Some("Wait for the game's work to finish before deleting it".to_owned());
+            return;
+        }
+        let steam_note = if self.steam_root.is_none() {
+            None
+        } else if steam::steam_running(Path::new("/proc")) {
+            // Steam rewrites its shortcuts file when it closes, undoing an edit made now.
+            Some("; Steam is running, so its shortcut for the game stays".to_owned())
+        } else {
+            let request = SteamRequest {
+                dir: dir.to_path_buf(),
+                title: id.to_owned(),
+                cover: None,
+                exe: None,
+                change: SteamChange::Remove,
+            };
+            write_steam_entry(&self.steam_root, &request)
+                .err()
+                .map(|err| format!("; Steam: {err}"))
+        };
+        self.steam_cache.replace(None);
+        let outcome = delete_game(self.libraries.roots(), dir);
+        self.close_details_page();
+        self.rescan();
+        self.message = Some(match outcome {
+            Ok(()) => format!("Deleted {id}{}", steam_note.unwrap_or_default()),
+            Err(err) => format!("Could not delete {id}: {err}"),
+        });
     }
 
     /// Installs winetricks verbs into the game's prefix in the background.
@@ -1777,6 +1817,7 @@ impl App {
             save: None,
             set_proton: Some(version),
             reset_prefix: false,
+            delete: false,
             install: None,
         };
         self.apply_tuning(result);
@@ -2313,6 +2354,7 @@ impl eframe::App for App {
                     save: action.save_tuning,
                     set_proton: action.set_proton,
                     reset_prefix: action.reset_prefix,
+                    delete: action.delete_game,
                     install: action.install,
                 });
                 if let Some(control) = action.focus {
@@ -2881,6 +2923,8 @@ fn write_steam_entry(
     let launcher = std::env::current_exe().map_err(|e| e.to_string())?;
     let grid = steam::grid_dir(&root, &account);
     let mut note = String::new();
+    // The app id of an entry taken out, whose images go too.
+    let mut gone = None;
     // Writes the images of the game's entry and points its icon at the written file.
     let mut art = |shortcuts: &mut steam::Value, app_id: u32, required: bool| {
         let Some(cover) = &request.cover else {
@@ -2912,9 +2956,11 @@ fn write_steam_entry(
             "Added"
         }
         SteamChange::Remove => {
-            if !steam::remove_game(&mut shortcuts, &request.dir) {
+            let Some(app_id) = steam::app_id_of(&shortcuts, &request.dir) else {
                 return Ok(format!("{} has no Steam entry", request.title));
-            }
+            };
+            steam::remove_game(&mut shortcuts, &request.dir);
+            gone = Some(app_id);
             "Removed"
         }
         SteamChange::Images | SteamChange::ToggleIcon => {
@@ -2925,6 +2971,14 @@ fn write_steam_entry(
         }
     };
     steam::save_shortcuts(&path, &shortcuts).map_err(|e| format!("{}: {e}", path.display()))?;
+    if let Some(id) = gone {
+        let names = steam::grid_names(id)
+            .into_iter()
+            .chain([format!("{id}_hero.png"), format!("{id}_icon.png")]);
+        for name in names {
+            let _ = std::fs::remove_file(grid.join(name));
+        }
+    }
     let restart = if steam::steam_running(Path::new("/proc")) {
         "; restart Steam to see it"
     } else {
@@ -2943,6 +2997,7 @@ struct TuningResult {
     save: Option<(std::collections::BTreeMap<String, String>, String)>,
     set_proton: Option<Option<String>>,
     reset_prefix: bool,
+    delete: bool,
     install: Option<Vec<String>>,
 }
 

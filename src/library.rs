@@ -211,6 +211,18 @@ pub fn scan(library_dir: &Path) -> io::Result<Vec<Game>> {
     Ok(games)
 }
 
+/// Erases a game's folder. Refuses anything that is not a direct child of a library root, so a
+/// wrong path can never take a library or a parent folder with it.
+pub fn delete_game(roots: &[PathBuf], dir: &Path) -> io::Result<()> {
+    if !dir.parent().is_some_and(|p| roots.iter().any(|r| r == p)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not a game folder of a library", dir.display()),
+        ));
+    }
+    std::fs::remove_dir_all(dir)
+}
+
 /// A store a game id comes from. Only DLsite and 072Project ids get store information looked up online.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Store {

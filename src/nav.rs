@@ -112,6 +112,9 @@ pub enum Control {
     ResetPrefix,
     DeletePrefix,
     KeepPrefix,
+    DeleteGame,
+    ConfirmDeleteGame,
+    KeepGame,
     // Libraries window.
     LibraryPath,
     LibraryAdd,
