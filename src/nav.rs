@@ -112,6 +112,7 @@ pub enum Control {
     ResetPrefix,
     DeletePrefix,
     KeepPrefix,
+    FindSaves,
     DeleteGame,
     ConfirmDeleteGame,
     KeepGame,

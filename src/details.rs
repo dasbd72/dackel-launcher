@@ -11,6 +11,7 @@ use dackel_launcher::nav::Control;
 use dackel_launcher::pickers::AUTOMATIC_PROTON;
 use dackel_launcher::profile::{self, Stats};
 use dackel_launcher::proton;
+use dackel_launcher::saves::Saves;
 use dackel_launcher::steam_art::IconSource;
 use dackel_launcher::tuning::{format_env, parse_env, split_args};
 use dackel_launcher::winetricks::{COMMON, parse_verbs, toggle_verb};
@@ -48,6 +49,10 @@ pub struct TuningEdit {
     pub installed: Vec<String>,
     confirm_reset: bool,
     confirm_delete: bool,
+    /// Save-like paths found by the last search, if one ran.
+    pub saves: Option<Saves>,
+    /// A search is running.
+    pub finding: bool,
     /// Proton versions installed here, for the per-game choice.
     pub proton_versions: Vec<String>,
     /// The Proton version chosen for this game; `None` is automatic.
@@ -79,6 +84,8 @@ impl TuningEdit {
             installed: profile::read_winetricks(game_dir).unwrap_or_default(),
             confirm_reset: false,
             confirm_delete: false,
+            saves: None,
+            finding: false,
             proton_versions: proton::selectable(&proton::compat_dir()).unwrap_or_default(),
             pin: tuning.proton,
             steam_icon: profile::read_steam_icon(game_dir).unwrap_or_default(),
@@ -155,6 +162,7 @@ pub struct DetailsAction {
     pub reset_prefix: bool,
     /// Erase the game's folder (already confirmed).
     pub delete_game: bool,
+    pub find_saves: bool,
     /// Winetricks verbs to install into the prefix.
     pub install: Option<Vec<String>>,
     pub steam: Option<SteamChange>,
@@ -425,6 +433,7 @@ pub fn details_ui(
                     ui.colored_label(egui::Color32::LIGHT_RED, err);
                 }
                 launch_options(ui, view, frame, edit, &mut action);
+                saves_section(ui, frame, edit, &mut action);
                 delete_game_section(ui, view, frame, edit, &mut action);
             };
             if stacked {
@@ -612,6 +621,45 @@ pub fn text_box(
 
 /// Per-game env and arguments, the Proton choice, winetricks installs and Prefix reset.
 /// Everything in it can be focused with the controller.
+/// The Find saves button and what it found.
+fn saves_section(
+    ui: &mut egui::Ui,
+    frame: &mut FocusFrame,
+    edit: &mut TuningEdit,
+    action: &mut DetailsAction,
+) {
+    ui.separator();
+    let label = if edit.finding {
+        "Searching..."
+    } else {
+        "Find saves"
+    };
+    let find = ui.add_enabled(!edit.finding, egui::Button::new(label));
+    if frame.pressed(ui, Control::FindSaves, &find, !edit.finding) {
+        action.find_saves = true;
+    }
+    let Some(saves) = &edit.saves else {
+        return;
+    };
+    if saves.paths.is_empty() {
+        ui.weak("Nothing with \"sav\" in its name was found.");
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .max_height(200.0)
+        .show(ui, |ui| {
+            for path in &saves.paths {
+                ui.label(egui::RichText::new(path.display().to_string()).monospace());
+            }
+        });
+    if saves.more {
+        ui.weak(format!(
+            "Only the first {} are shown.",
+            dackel_launcher::saves::MAX
+        ));
+    }
+}
+
 /// The Delete game button; it asks first, with focus on the safe answer.
 fn delete_game_section(
     ui: &mut egui::Ui,

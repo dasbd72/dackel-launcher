@@ -34,6 +34,7 @@ use dackel_launcher::popup::{OVERWRITE_CHOICES, OverwritePrompt, PickTarget, Pop
 use dackel_launcher::profile::{self, ExeState, Stats};
 use dackel_launcher::proton::{self, ProtonChoice};
 use dackel_launcher::reload::Infos;
+use dackel_launcher::saves::{Saves, find_saves};
 use dackel_launcher::settings::{self, Settings};
 use dackel_launcher::steam::{self, LauncherState};
 use dackel_launcher::steam_art::{self, IconSource};
@@ -283,6 +284,8 @@ struct App {
     steam_job: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// Winetricks installs running in the background, by game folder.
     winetricks_jobs: std::collections::HashMap<PathBuf, WinetricksJob>,
+    /// A save search running off the UI thread, with the game folder it is for.
+    saves_job: Option<(PathBuf, std::sync::mpsc::Receiver<Saves>)>,
     /// What Steam has for the launcher itself.
     launcher_cache: std::cell::Cell<Option<LauncherState>>,
     /// A text box of the Libraries window has the keyboard; the pad's B and up/down leave it.
@@ -342,6 +345,7 @@ impl App {
             launcher_cache: std::cell::Cell::new(None),
             steam_job: None,
             winetricks_jobs: std::collections::HashMap::new(),
+            saves_job: None,
             library_typing: false,
             library_leave: false,
             search_typing: false,
@@ -1028,6 +1032,7 @@ impl App {
             set_proton,
             reset_prefix: reset,
             delete,
+            find,
             install,
         } = result;
         if let Some((env, args)) = save {
@@ -1056,6 +1061,9 @@ impl App {
         if let Some(verbs) = install {
             self.start_winetricks(&dir, &id, verbs);
         }
+        if find {
+            self.start_find_saves(&dir);
+        }
         if delete {
             self.delete_game(&dir, &id);
         }
@@ -1076,6 +1084,46 @@ impl App {
                 }
             });
         }
+    }
+
+    /// Looks for the game's saves in the background.
+    fn start_find_saves(&mut self, dir: &Path) {
+        let Some(edit) = self.tuning_edit.as_mut().filter(|e| e.dir == dir) else {
+            return;
+        };
+        if self.saves_job.is_some() {
+            return;
+        }
+        edit.finding = true;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let (game, repaint) = (dir.to_path_buf(), self.repaint.clone());
+        std::thread::spawn(move || {
+            let _ = sender.send(find_saves(&game));
+            if let Some(ctx) = repaint {
+                ctx.request_repaint();
+            }
+        });
+        self.saves_job = Some((dir.to_path_buf(), receiver));
+    }
+
+    /// Shows the saves found, if the page they were searched for is still open.
+    fn poll_saves(&mut self) {
+        let Some((dir, receiver)) = &self.saves_job else {
+            return;
+        };
+        let found = match receiver.try_recv() {
+            Ok(found) => found,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Saves {
+                paths: Vec::new(),
+                more: false,
+            },
+        };
+        if let Some(edit) = self.tuning_edit.as_mut().filter(|e| e.dir == *dir) {
+            edit.saves = Some(found);
+            edit.finding = false;
+        }
+        self.saves_job = None;
     }
 
     /// Erases the game's folder, after taking its Steam entry out (which is found by the folder).
@@ -1818,6 +1866,7 @@ impl App {
             set_proton: Some(version),
             reset_prefix: false,
             delete: false,
+            find: false,
             install: None,
         };
         self.apply_tuning(result);
@@ -2060,6 +2109,7 @@ impl eframe::App for App {
         self.poll_extractions();
         self.poll_steam();
         self.poll_winetricks();
+        self.poll_saves();
         if self.jobs.any() {
             // Backstop in case a wake-up is missed.
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -2355,6 +2405,7 @@ impl eframe::App for App {
                     set_proton: action.set_proton,
                     reset_prefix: action.reset_prefix,
                     delete: action.delete_game,
+                    find: action.find_saves,
                     install: action.install,
                 });
                 if let Some(control) = action.focus {
@@ -2998,6 +3049,7 @@ struct TuningResult {
     set_proton: Option<Option<String>>,
     reset_prefix: bool,
     delete: bool,
+    find: bool,
     install: Option<Vec<String>>,
 }
 

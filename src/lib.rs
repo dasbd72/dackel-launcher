@@ -23,6 +23,7 @@ pub mod prefix;
 pub mod profile;
 pub mod proton;
 pub mod reload;
+pub mod saves;
 pub mod settings;
 pub mod steam;
 pub mod steam_art;
