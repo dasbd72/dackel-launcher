@@ -49,6 +49,7 @@ pub struct TuningEdit {
     pub installed: Vec<String>,
     confirm_reset: bool,
     confirm_delete: bool,
+    confirm_move: bool,
     /// Save-like paths found by the last search, if one ran.
     pub saves: Option<Saves>,
     /// A search is running.
@@ -84,6 +85,7 @@ impl TuningEdit {
             installed: profile::read_winetricks(game_dir).unwrap_or_default(),
             confirm_reset: false,
             confirm_delete: false,
+            confirm_move: false,
             saves: None,
             finding: false,
             proton_versions: proton::selectable(&proton::compat_dir()).unwrap_or_default(),
@@ -131,6 +133,17 @@ pub struct DetailsView<'a> {
     pub installing: bool,
     /// Whether the game has an entry in Steam; `None` when Steam was not found.
     pub steam_entry: Option<bool>,
+    /// The other libraries the game could move to.
+    pub move_targets: &'a [MoveTarget],
+    /// The game is being moved to another library.
+    pub moving: Option<Progress>,
+}
+
+/// A library a game can be moved to; `blocked` says why it cannot be, when it cannot.
+pub struct MoveTarget {
+    pub label: String,
+    pub dir: PathBuf,
+    pub blocked: Option<&'static str>,
 }
 
 /// What the details page asks to do with the game's Steam entry.
@@ -162,6 +175,9 @@ pub struct DetailsAction {
     pub reset_prefix: bool,
     /// Erase the game's folder (already confirmed).
     pub delete_game: bool,
+    /// Move the game's folder into this library (already chosen).
+    pub move_game: Option<PathBuf>,
+    pub cancel_move: bool,
     pub find_saves: bool,
     /// Winetricks verbs to install into the prefix.
     pub install: Option<Vec<String>>,
@@ -434,6 +450,7 @@ pub fn details_ui(
                 }
                 launch_options(ui, view, frame, edit, &mut action);
                 saves_section(ui, frame, edit, &mut action);
+                move_game_section(ui, view, frame, edit, &mut action);
                 delete_game_section(ui, view, frame, edit, &mut action);
             };
             if stacked {
@@ -660,6 +677,80 @@ fn saves_section(
     }
 }
 
+/// The Move to library button; it lists the other libraries to pick from.
+fn move_game_section(
+    ui: &mut egui::Ui,
+    view: &DetailsView,
+    frame: &mut FocusFrame,
+    edit: &mut TuningEdit,
+    action: &mut DetailsAction,
+) {
+    if let Some(progress) = view.moving {
+        ui.horizontal_wrapped(|ui| {
+            if progress.bytes_total == 0 {
+                ui.spinner();
+                ui.label("Moving to another library...");
+            } else {
+                ui.add(
+                    egui::ProgressBar::new(progress.fraction())
+                        .desired_width(340.0)
+                        .desired_height(crate::icons::BUTTON_HEIGHT)
+                        .text(format!("Moving {:.0}%", progress.fraction() * 100.0)),
+                );
+            }
+            let cancel = form_button(ui, "Cancel move", true);
+            if frame.pressed(ui, Control::CancelMove, &cancel, true) {
+                action.cancel_move = true;
+            }
+        });
+        return;
+    }
+    let busy = view.running || view.extracting.is_some() || view.installing;
+    let none = view.move_targets.is_empty();
+    ui.separator();
+    if edit.confirm_move && !busy && !none {
+        ui.label("Move this game, with its prefix and saves, to:");
+        for (slot, target) in view.move_targets.iter().enumerate() {
+            if slot == 0 && edit.focus.take() == Some(Control::KeepMove) {
+                action.focus = Some(Control::MoveTarget(0));
+            }
+            let ok = target.blocked.is_none();
+            ui.horizontal(|ui| {
+                let response = ui.add_enabled(ok, egui::Button::new(&target.label));
+                if frame.pressed(ui, Control::MoveTarget(slot), &response, ok) {
+                    action.move_game = Some(target.dir.clone());
+                    edit.confirm_move = false;
+                }
+                // Shown, not only on hover, so the gamepad sees why it is greyed out.
+                if let Some(why) = target.blocked {
+                    ui.weak(why);
+                }
+            });
+        }
+        let keep = form_button(ui, "Cancel", true);
+        if frame.pressed(ui, Control::KeepMove, &keep, true) {
+            edit.confirm_move = false;
+            edit.focus = Some(Control::MoveGame);
+        }
+    } else {
+        edit.confirm_move = false;
+        if edit.focus.take() == Some(Control::MoveGame) {
+            action.focus = Some(Control::MoveGame);
+        }
+        let enabled = !busy && !none;
+        let button = ui.add_enabled(enabled, egui::Button::new("Move to library..."));
+        if frame.pressed(ui, Control::MoveGame, &button, enabled) {
+            edit.confirm_move = true;
+            edit.focus = Some(Control::KeepMove);
+        }
+        if none {
+            ui.weak("Add another library first.");
+        } else if busy {
+            ui.weak("Wait for the game to stop and its work to finish first.");
+        }
+    }
+}
+
 /// The Delete game button; it asks first, with focus on the safe answer.
 fn delete_game_section(
     ui: &mut egui::Ui,
@@ -668,7 +759,8 @@ fn delete_game_section(
     edit: &mut TuningEdit,
     action: &mut DetailsAction,
 ) {
-    let busy = view.running || view.extracting.is_some() || view.installing;
+    let busy =
+        view.running || view.extracting.is_some() || view.installing || view.moving.is_some();
     ui.separator();
     if edit.confirm_delete {
         ui.colored_label(
@@ -846,6 +938,8 @@ mod tests {
             running: false,
             extracting: None,
             installing: false,
+            move_targets: &[],
+            moving: None,
             steam_entry: None,
         };
         let ctx = egui::Context::default();
@@ -951,6 +1045,8 @@ mod tests {
             running: false,
             extracting: None,
             installing: false,
+            move_targets: &[],
+            moving: None,
             steam_entry: steam.then_some(true),
         };
         let ctx = egui::Context::default();

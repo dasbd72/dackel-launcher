@@ -1,7 +1,9 @@
 //! Background extraction, so a big zip does not freeze the window.
 
 use crate::extract::{self, Encoding, Existing, ExtractError, Progress};
+use crate::library::{self, Moved};
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -120,6 +122,77 @@ impl ExtractJob {
     }
 }
 
+enum MoveUpdate {
+    Progress(Progress),
+    Done(io::Result<Moved>),
+}
+
+/// A game folder moving to another library on its own thread. Poll it from the UI thread.
+pub struct MoveJob {
+    rx: Receiver<MoveUpdate>,
+    cancel: Arc<AtomicBool>,
+    progress: Progress,
+}
+
+impl MoveJob {
+    /// Starts moving `dir` into the library `dest`. `wake` is called from the worker whenever
+    /// there is something new to show.
+    pub fn start(
+        roots: Vec<PathBuf>,
+        dir: PathBuf,
+        dest: PathBuf,
+        wake: impl Fn() + Send + 'static,
+    ) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        std::thread::spawn(move || {
+            let mut latest = Progress::default();
+            let mut last_sent: Option<Instant> = None;
+            let result = library::move_game(&roots, &dir, &dest, &flag, false, &mut |p| {
+                latest = p;
+                if last_sent.is_none_or(|at| at.elapsed() >= REPORT_EVERY) {
+                    last_sent = Some(Instant::now());
+                    let _ = tx.send(MoveUpdate::Progress(p));
+                    wake();
+                }
+            });
+            let _ = tx.send(MoveUpdate::Progress(latest));
+            let _ = tx.send(MoveUpdate::Done(result));
+            wake();
+        });
+        MoveJob {
+            rx,
+            cancel,
+            progress: Progress::default(),
+        }
+    }
+
+    /// Asks the worker to stop; a copy removes what it made. Harmless once it has finished.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+    }
+
+    /// The most recent progress seen by `poll`.
+    pub fn progress(&self) -> Progress {
+        self.progress
+    }
+
+    /// Takes in what the worker sent; the result once it has finished.
+    pub fn poll(&mut self) -> Option<io::Result<Moved>> {
+        loop {
+            match self.rx.try_recv() {
+                Ok(MoveUpdate::Progress(p)) => self.progress = p,
+                Ok(MoveUpdate::Done(result)) => return Some(result),
+                Err(mpsc::TryRecvError::Empty) => return None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    return Some(Err(io::Error::other("the move stopped unexpectedly")));
+                }
+            }
+        }
+    }
+}
+
 /// Looking for the files an extraction would overwrite, on its own thread.
 pub struct OverwriteCheck {
     rx: Receiver<Result<Vec<PathBuf>, String>>,
@@ -150,15 +223,18 @@ pub enum Cancelled {
     Check,
     /// The extraction was asked to stop; it removes what it created once it has.
     Extraction,
+    /// The move was asked to stop; a copy removes what it made.
+    Move,
     /// Nothing was running for that game.
     Nothing,
 }
 
-/// The extractions and overwrite checks running in the background, by game folder.
+/// The extractions, overwrite checks and moves running in the background, by game folder.
 #[derive(Default)]
 pub struct Jobs {
     extracting: HashMap<String, ExtractJob>,
     checking: HashMap<String, OverwriteCheck>,
+    moving: HashMap<String, MoveJob>,
 }
 
 impl Jobs {
@@ -166,10 +242,13 @@ impl Jobs {
         Self::default()
     }
 
-    /// Whether the game folder `key` has an extraction running or its files being checked
-    /// for overwrites. Either one means it must not be extracted, reloaded or launched again.
+    /// Whether the game folder `key` has an extraction running, its files being checked for
+    /// overwrites, or a move under way. Any of them means it must not be extracted, reloaded,
+    /// launched or deleted meanwhile.
     pub fn in_progress(&self, key: &str) -> bool {
-        self.extracting.contains_key(key) || self.checking.contains_key(key)
+        self.extracting.contains_key(key)
+            || self.checking.contains_key(key)
+            || self.moving.contains_key(key)
     }
 
     pub fn is_extracting(&self, key: &str) -> bool {
@@ -178,7 +257,7 @@ impl Jobs {
 
     /// Whether anything is running.
     pub fn any(&self) -> bool {
-        !self.extracting.is_empty() || !self.checking.is_empty()
+        !self.extracting.is_empty() || !self.checking.is_empty() || !self.moving.is_empty()
     }
 
     /// The game folders with an extraction or a check running.
@@ -202,6 +281,28 @@ impl Jobs {
         self.extracting.insert(key, job);
     }
 
+    pub fn start_move(&mut self, key: String, job: MoveJob) {
+        self.moving.insert(key, job);
+    }
+
+    /// The progress of a move, once it has anything to show.
+    pub fn move_progress(&self, key: &str) -> Option<Progress> {
+        self.moving.get(key).map(MoveJob::progress)
+    }
+
+    /// The moves that have ended, taken out of the list.
+    pub fn finished_moves(&mut self) -> Vec<(String, io::Result<Moved>)> {
+        let done: Vec<_> = self
+            .moving
+            .iter_mut()
+            .filter_map(|(key, job)| Some((key.clone(), job.poll()?)))
+            .collect();
+        for (key, _) in &done {
+            self.moving.remove(key);
+        }
+        done
+    }
+
     /// Stops the check for `key`, or asks its extraction to stop.
     pub fn cancel(&mut self, key: &str) -> Cancelled {
         if self.checking.remove(key).is_some() {
@@ -209,6 +310,9 @@ impl Jobs {
         } else if let Some(job) = self.extracting.get(key) {
             job.cancel();
             Cancelled::Extraction
+        } else if let Some(job) = self.moving.get(key) {
+            job.cancel();
+            Cancelled::Move
         } else {
             Cancelled::Nothing
         }

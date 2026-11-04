@@ -16,7 +16,7 @@ use dackel_launcher::fonts;
 use dackel_launcher::headless;
 use dackel_launcher::import::{self, FileResult, Outcome, Policy};
 use dackel_launcher::info::{GameInfo, cover_path, load};
-use dackel_launcher::jobs::{Cancelled, ExtractJob, JobStatus, Jobs, OverwriteCheck};
+use dackel_launcher::jobs::{Cancelled, ExtractJob, JobStatus, Jobs, MoveJob, OverwriteCheck};
 use dackel_launcher::launch::{Launcher, UmuSpawner, unix_now};
 use dackel_launcher::library::{
     Game, Store, browser_start, delete_game, library_labels, resolve_library, scan_all, store_of,
@@ -331,6 +331,7 @@ impl App {
     fn new(library: PathBuf, startup: Startup) -> Self {
         // A folder listed twice (say, the one beside the program added again) shows once.
         let libraries = LibraryList::new(library, &startup.settings.libraries);
+        dackel_launcher::library::clean_moving(libraries.roots());
         let mut startup = startup;
         let added = libraries.added().to_vec();
         let tidy = startup.settings.libraries != added;
@@ -559,7 +560,7 @@ impl App {
             Cancelled::Extraction => {
                 self.message = Some(format!("Cancelling {}...", file_name_of(id)));
             }
-            Cancelled::Nothing => {}
+            Cancelled::Move | Cancelled::Nothing => {}
         }
     }
 
@@ -1032,9 +1033,17 @@ impl App {
             set_proton,
             reset_prefix: reset,
             delete,
+            move_to,
+            cancel_move,
             find,
             install,
         } = result;
+        if cancel_move {
+            self.jobs.cancel(&dir.to_string_lossy());
+        }
+        if let Some(dest) = move_to {
+            self.start_move(&dir, &id, dest);
+        }
         if let Some((env, args)) = save {
             self.message = Some(match profile::set_tuning(&dir, env, &args) {
                 Ok(()) => {
@@ -1130,7 +1139,7 @@ impl App {
     fn delete_game(&mut self, dir: &Path, id: &str) {
         if self.launcher.is_running(dir)
             || self.winetricks_jobs.contains_key(dir)
-            || self.jobs.progress(&dir.to_string_lossy()).is_some()
+            || self.jobs.in_progress(&dir.to_string_lossy())
         {
             self.message = Some("Wait for the game's work to finish before deleting it".to_owned());
             return;
@@ -1199,6 +1208,104 @@ impl App {
                 result,
             },
         );
+    }
+
+    /// The other libraries a game could move to, with the reason when one cannot take it.
+    fn move_targets(&self, game: &Game) -> Vec<details::MoveTarget> {
+        let roots = self.libraries.roots();
+        let labels = library_labels(roots);
+        let here = game.dir.parent();
+        roots
+            .iter()
+            .zip(labels)
+            .filter(|(root, _)| Some(root.as_path()) != here)
+            .map(|(root, label)| details::MoveTarget {
+                blocked: if self.libraries.is_offline(root) {
+                    Some("This library cannot be read right now")
+                } else {
+                    dackel_launcher::library::move_blocked(roots, &game.dir, root)
+                },
+                label,
+                dir: root.clone(),
+            })
+            .collect()
+    }
+
+    /// Moves the game's folder into another library in the background.
+    fn start_move(&mut self, dir: &Path, id: &str, dest: PathBuf) {
+        let key = dir.to_string_lossy().into_owned();
+        if self.launcher.is_running(dir)
+            || self.winetricks_jobs.contains_key(dir)
+            || self.jobs.in_progress(&key)
+        {
+            self.message = Some("Wait for the game's work to finish before moving it".to_owned());
+            return;
+        }
+        let repaint = self.repaint.clone();
+        let job = MoveJob::start(
+            self.libraries.roots().to_vec(),
+            dir.to_path_buf(),
+            dest,
+            move || {
+                if let Some(ctx) = &repaint {
+                    ctx.request_repaint();
+                }
+            },
+        );
+        self.message = Some(format!("Moving {id}..."));
+        self.jobs.start_move(key, job);
+    }
+
+    /// Finishes the moves that are done: the game's Steam entry follows it, the library is
+    /// read again, and the details page stays open on the game in its new library.
+    fn poll_moves(&mut self) {
+        for (key, outcome) in self.jobs.finished_moves() {
+            let id = file_name_of(&key);
+            let moved = match outcome {
+                Ok(moved) => moved,
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
+                    self.message = Some(format!("Cancelled moving {id}"));
+                    continue;
+                }
+                Err(err) => {
+                    self.message = Some(format!("Could not move {id}: {err}"));
+                    continue;
+                }
+            };
+            let old = PathBuf::from(&key);
+            let mut note = String::new();
+            if let Some(leftover) = &moved.leftover {
+                note += &format!(
+                    "; the old folder may be partly erased, delete it by hand: {}",
+                    leftover.display()
+                );
+            }
+            if self.steam_entry(&old) == Some(true) {
+                note += &match self.move_steam_entry(&old, &moved.dir) {
+                    Ok(true) => "; Steam is running, so restart it to see the entry".to_owned(),
+                    Ok(false) => String::new(),
+                    Err(err) => format!("; the Steam entry still points at the old folder: {err}"),
+                };
+            }
+            self.steam_cache.replace(None);
+            let was_open = matches!(&self.screen, Screen::Details(open) if *open == key);
+            self.rescan();
+            if was_open {
+                self.open_details_page(moved.dir.to_string_lossy().into_owned());
+            }
+            self.message = Some(format!("Moved {id}{note}"));
+        }
+    }
+
+    /// Points the game's Steam entry at its new folder. True when Steam is running, which may
+    /// undo the change when it exits.
+    fn move_steam_entry(&self, old: &Path, new: &Path) -> Result<bool, String> {
+        let (_, path, _) = self.steam_shortcuts()?;
+        let mut shortcuts = steam::load_shortcuts(&path)?;
+        if steam::move_game(&mut shortcuts, old, new)? {
+            steam::save_shortcuts(&path, &shortcuts).map_err(|e| e.to_string())?;
+        }
+        Ok(steam::steam_running(Path::new("/proc")))
     }
 
     /// Reports the installs that have finished.
@@ -1866,6 +1973,8 @@ impl App {
             set_proton: Some(version),
             reset_prefix: false,
             delete: false,
+            move_to: None,
+            cancel_move: false,
             find: false,
             install: None,
         };
@@ -2109,6 +2218,7 @@ impl eframe::App for App {
         self.poll_extractions();
         self.poll_steam();
         self.poll_winetricks();
+        self.poll_moves();
         self.poll_saves();
         if self.jobs.any() {
             // Backstop in case a wake-up is missed.
@@ -2365,6 +2475,7 @@ impl eframe::App for App {
                     self.blur_cache
                         .cover_view(&ctx, self.settings.blur_covers, cover.as_deref());
                 let cover_for_steam = cover.clone();
+                let move_targets = self.move_targets(&entry.game);
                 let view = DetailsView {
                     id: &entry.game.id,
                     library: self.library_label(&entry.game),
@@ -2383,6 +2494,8 @@ impl eframe::App for App {
                     running: self.launcher.is_running(&entry.game.dir),
                     extracting: self.jobs.progress(&entry.game.dir_key()),
                     installing: self.winetricks_jobs.contains_key(&entry.game.dir),
+                    moving: self.jobs.move_progress(&entry.game.dir_key()),
+                    move_targets: &move_targets,
                     steam_entry: self.steam_entry(&entry.game.dir),
                 };
                 if self.tuning_edit.as_ref().is_none_or(|e| e.key != *id) {
@@ -2405,6 +2518,8 @@ impl eframe::App for App {
                     set_proton: action.set_proton,
                     reset_prefix: action.reset_prefix,
                     delete: action.delete_game,
+                    move_to: action.move_game,
+                    cancel_move: action.cancel_move,
                     find: action.find_saves,
                     install: action.install,
                 });
@@ -3049,6 +3164,8 @@ struct TuningResult {
     set_proton: Option<Option<String>>,
     reset_prefix: bool,
     delete: bool,
+    move_to: Option<PathBuf>,
+    cancel_move: bool,
     find: bool,
     install: Option<Vec<String>>,
 }

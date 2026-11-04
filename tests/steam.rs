@@ -2,8 +2,9 @@
 //! `shortcuts.vdf`, and finding the Steam account to write to.
 
 use dackel_launcher::steam::{
-    account_with_newest, add_game, crc32, game_dir_of, grid_names, launch_options, new_shortcuts,
-    refresh_launcher, remove_game, shortcut_app_id, steam_root, steam_running, write_grid,
+    account_with_newest, add_game, app_id_of, crc32, game_dir_of, grid_names, launch_options,
+    move_game, new_shortcuts, refresh_launcher, remove_game, shortcut_app_id, steam_root,
+    steam_running, write_grid,
 };
 use dackel_launcher::vdf::{Value, parse, write};
 use std::fs;
@@ -537,4 +538,33 @@ mod game_icon {
             Path::new("/x.png")
         ));
     }
+}
+
+#[test]
+fn a_moved_game_keeps_its_entry_and_app_id_with_the_new_folder() {
+    let mut root = with_users_own();
+    let id = add_game(&mut root, &launcher(), Path::new("/a/RJ1"), "One").unwrap();
+
+    assert_eq!(
+        move_game(&mut root, Path::new("/a/RJ1"), Path::new("/b/RJ1")),
+        Ok(true)
+    );
+
+    let all = entries(&root);
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0], &users_own());
+    assert_eq!(
+        game_dir_of(text(all[1], "LaunchOptions")),
+        Some(PathBuf::from("/b/RJ1"))
+    );
+    assert_eq!(app_id_of(&root, Path::new("/b/RJ1")), Some(id));
+    assert_eq!(
+        move_game(&mut root, Path::new("/a/RJ1"), Path::new("/c/RJ1")),
+        Ok(false),
+        "no entry left"
+    );
+    assert!(
+        move_game(&mut root, Path::new("/b/RJ1"), Path::new("/d/\"RJ1")).is_err(),
+        "a quote cannot be written into launch options"
+    );
 }

@@ -1,5 +1,7 @@
+use crate::extract::Progress;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const LIBRARY_DIR: &str = "DLSiteLibrary";
 
@@ -40,7 +42,7 @@ pub fn may_create_library(library: &Path) -> bool {
 
 /// Whether the current user may write into `dir`, as the kernel decides (owner, group and
 /// other bits, and read-only mounts). Nothing is written.
-fn writable_by_me(dir: &Path) -> bool {
+pub fn writable_by_me(dir: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let Ok(path) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
         return false;
@@ -221,6 +223,205 @@ pub fn delete_game(roots: &[PathBuf], dir: &Path) -> io::Result<()> {
         ));
     }
     std::fs::remove_dir_all(dir)
+}
+
+/// What a finished move leaves behind.
+#[derive(Debug)]
+pub struct Moved {
+    /// The game's folder in the destination library.
+    pub dir: PathBuf,
+    /// The old folder, when the copy was complete but the old one could not be erased.
+    pub leftover: Option<PathBuf>,
+}
+
+/// Written first into the hidden folder a copy is made in, so only our own leftovers are cleaned.
+const MOVING_MARK: &str = ".dackel-moving";
+
+/// Why a game cannot move into `dest`, if it cannot: the destination must be another added
+/// library that we can write to and that has no folder of the game's name. The one place that
+/// decides this, for the buttons and for `move_game` alike.
+pub fn move_blocked(roots: &[PathBuf], dir: &Path, dest: &Path) -> Option<&'static str> {
+    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+        return Some("This is not a game folder");
+    };
+    if !roots.iter().any(|r| r == parent) {
+        Some("This is not a game folder of a library")
+    } else if dest == parent || !roots.iter().any(|r| r == dest) {
+        Some("This is not another library")
+    } else if !writable_by_me(dest) {
+        Some("You cannot write to this library")
+    } else if dest.join(name).symlink_metadata().is_ok() {
+        Some("It already has a folder with this name")
+    } else {
+        None
+    }
+}
+
+/// Moves a game's folder into another added library; nothing is overwritten.
+/// `force_copy` skips the rename, so the copy path can be tested without a second drive.
+/// A copy reports its progress and stops at the next chunk once `cancel` is set, removing
+/// what it made.
+pub fn move_game(
+    roots: &[PathBuf],
+    dir: &Path,
+    dest: &Path,
+    cancel: &AtomicBool,
+    force_copy: bool,
+    progress: &mut dyn FnMut(Progress),
+) -> io::Result<Moved> {
+    if let Some(why) = move_blocked(roots, dir, dest) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, why));
+    }
+    let name = dir.file_name().unwrap_or_default();
+    let target = dest.join(name);
+    if !force_copy {
+        match std::fs::rename(dir, &target) {
+            Ok(()) => {
+                return Ok(Moved {
+                    dir: target,
+                    leftover: None,
+                });
+            }
+            Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {}
+            Err(e) => return Err(e),
+        }
+    }
+    // Copy under a hidden name (the scan skips it) and rename it into place only once complete.
+    let temp = dest.join(format!(".{}.moving", name.to_string_lossy()));
+    match temp.symlink_metadata() {
+        Ok(_) if temp.join(MOVING_MARK).exists() => std::fs::remove_dir_all(&temp)?,
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} is in the way", temp.display()),
+            ));
+        }
+        Err(_) => {}
+    }
+    let copied = copy_game(dir, &temp, cancel, progress).and_then(|()| {
+        std::fs::remove_file(temp.join(MOVING_MARK))?;
+        if tree_size(dir)? != tree_size(&temp)? {
+            return Err(io::Error::other("the copy does not match the original"));
+        }
+        // The last chance to stop: after the rename the game is in its new place.
+        check_cancel(cancel)?;
+        std::fs::rename(&temp, &target)
+    });
+    if let Err(e) = copied {
+        let _ = std::fs::remove_dir_all(&temp);
+        return Err(e);
+    }
+    let leftover = std::fs::remove_dir_all(dir)
+        .err()
+        .map(|_| dir.to_path_buf());
+    Ok(Moved {
+        dir: target,
+        leftover,
+    })
+}
+
+/// Removes the hidden folders a copy that never finished left in the libraries.
+pub fn clean_moving(roots: &[PathBuf]) {
+    for entry in roots
+        .iter()
+        .filter_map(|r| std::fs::read_dir(r).ok())
+        .flatten()
+        .flatten()
+    {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.')
+            && name.ends_with(".moving")
+            && entry.path().join(MOVING_MARK).exists()
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+fn check_cancel(cancel: &AtomicBool) -> io::Result<()> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
+    }
+    Ok(())
+}
+
+fn copy_game(
+    src: &Path,
+    dst: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> io::Result<()> {
+    let (files, bytes) = tree_size(src)?;
+    let mut now = Progress {
+        bytes_total: bytes,
+        files_total: files,
+        ..Progress::default()
+    };
+    progress(now);
+    std::fs::create_dir(dst)?;
+    std::fs::write(dst.join(MOVING_MARK), "")?;
+    copy_tree(src, dst, cancel, &mut now, progress)
+}
+
+/// Copies a folder keeping symlinks (not followed) and permissions, in chunks so a cancel
+/// does not wait for a big file.
+fn copy_tree(
+    src: &Path,
+    dst: &Path,
+    cancel: &AtomicBool,
+    now: &mut Progress,
+    progress: &mut dyn FnMut(Progress),
+) -> io::Result<()> {
+    use std::io::{Read, Write};
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        check_cancel(cancel)?;
+        let entry = entry?;
+        let (from, to) = (entry.path(), dst.join(entry.file_name()));
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            std::os::unix::fs::symlink(std::fs::read_link(&from)?, &to)?;
+        } else if kind.is_dir() {
+            copy_tree(&from, &to, cancel, now, progress)?;
+        } else {
+            let mut input = std::fs::File::open(&from)?;
+            let mut output = std::fs::File::create(&to)?;
+            let mut buf = vec![0u8; 1 << 20];
+            loop {
+                check_cancel(cancel)?;
+                let n = input.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                output.write_all(&buf[..n])?;
+                now.bytes_done += n as u64;
+                progress(*now);
+            }
+            output.set_permissions(input.metadata()?.permissions())?;
+        }
+        now.files_done += 1;
+        progress(*now);
+    }
+    // Last, so a read-only folder can still be filled.
+    std::fs::set_permissions(dst, std::fs::symlink_metadata(src)?.permissions())
+}
+
+/// Entry count and total file size of a folder, symlinks not followed.
+fn tree_size(dir: &Path) -> io::Result<(u64, u64)> {
+    let (mut count, mut bytes) = (0, 0);
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        count += 1;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            let (c, b) = tree_size(&entry.path())?;
+            (count, bytes) = (count + c, bytes + b);
+        } else if !kind.is_symlink() {
+            bytes += entry.metadata()?.len();
+        }
+    }
+    Ok((count, bytes))
 }
 
 /// A store a game id comes from. Only DLsite and 072Project ids get store information looked up online.

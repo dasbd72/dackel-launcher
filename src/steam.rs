@@ -295,6 +295,25 @@ pub fn app_id_of(root: &Value, game_dir: &Path) -> Option<u32> {
         })
 }
 
+/// Points a game's entry at its new folder. The app id comes from the program and name, so it
+/// and the artwork stay. `Ok(false)` when the game had no entry; an error when the new folder
+/// cannot be written into launch options.
+pub fn move_game(root: &mut Value, old: &Path, new: &Path) -> Result<bool, String> {
+    let options = launch_options(new)?;
+    Ok(
+        match list_mut(root)
+            .iter_mut()
+            .find(|(_, e)| game_of(e).as_deref() == Some(old))
+        {
+            Some((_, entry)) => {
+                set(entry, "LaunchOptions", Value::Str(options));
+                true
+            }
+            None => false,
+        },
+    )
+}
+
 /// Takes out the game's entry and numbers the rest again, as Steam does. False when the
 /// game had none.
 pub fn remove_game(root: &mut Value, game_dir: &Path) -> bool {

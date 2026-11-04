@@ -113,6 +113,11 @@ pub enum Control {
     DeletePrefix,
     KeepPrefix,
     FindSaves,
+    MoveGame,
+    /// The library in this slot of the move list.
+    MoveTarget(usize),
+    KeepMove,
+    CancelMove,
     DeleteGame,
     ConfirmDeleteGame,
     KeepGame,
